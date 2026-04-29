@@ -1,0 +1,125 @@
+; NOTE: This doesn't really work right now.
+
+; A brutally simple slotted implementation that is not super efficient.
+; The inefficiency comes from the fact that every node has *multiple* shapes depending on what variant of the children was chosen.
+
+(sort Renaming (Map i64 i64))
+(sort VecOfRenaming (Vec Renaming))
+
+(sort U) ; includes terms, ids, nodes.
+
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+(constructor Rename (Renaming U) U)
+
+; Renames gotta point to the smaller id.
+(rule
+    (
+        (= a (Rename m b))
+        (= b (ordering-max b a)) ; a < b
+        (!= a b)
+    )
+    (
+        (delete (Rename m b)) ; removes the e-node
+        (union b (Rename (inverse m) a))
+    )
+)
+
+; collapse nested renames towards leaders.
+; Rename compose
+(rule
+    (
+        ; c -> b -> a. a should be the leader
+        (= c (Rename m1 b))
+        (= b (Rename m2 a))
+        (= c (ordering-max b c))
+        (= b (ordering-max a b))
+        (!= a b)
+        (!= b c)
+    )
+    (
+        (delete (Rename m2 b))
+        (union c (Rename (compose m1 m2) a))
+    )
+)
+
+; critical pairs
+(rule
+    (
+        ; here x has two leaders.
+        (= x (Rename m1 l1))
+        (= x (Rename m2 l2))
+        (= l2 (ordering-max l1 l2))
+        (= x (ordering-max l1 x))
+        (!= x l1)
+        (!= l1 l2)
+    )
+    (
+        (delete (Rename m2 l2))
+        (union l2 (Rename (compose (inverse m2) m1) l1))
+    )
+)
+
+; shape computation for Var
+(rule
+    (
+        (Var n)
+    )
+    
+    (
+        (union (Var n) (Rename (map-insert (map-empty) 0 n) (Var 0)))
+    )
+)
+
+; shape computation for Var(0)
+(rule
+    ((Var 0))
+    ((union (Var 0) (Rename (map-insert (map-empty) 0 0) (Var 0))))
+)
+
+(rule
+    (
+        (= a (Var v1))
+        (= b (Var v2))
+        (= (Rename m a) b) 
+        (= b (ordering-max a b))
+        (!= a b)
+    )
+    (
+        (delete (Var v2))
+    )
+)
+
+;; (App f (Rename ... (Var 3)) (Rename ... (Var 0)))
+
+; shape computation for App
+(rule 
+    (
+        (= x (App f (Rename m1 a1) (Rename m2 a2)))
+        (= m_sh (shape2 m1 m2))
+        (!= (compose m_sh m1) m1)
+        (!= (compose m_sh m2) m2)
+        ; m_sh :: slots(x) -> shape-slots
+    )
+    (
+        (delete (App f (Rename m1 a1) (Rename m2 a2)))
+        (union x
+           (Rename (inverse m_sh)
+              (App f
+                (Rename (compose m_sh m1) a1) (Rename (compose m_sh m2) a2))))
+    )
+)
+
+;;; EXAMPLES ;;;
+
+(let $v1 (Var 24))
+(let $v2 (Var 12))
+
+(let $f1 (App "f" $v1 $v2))
+; (let $f2 (App "f" $v2 $v1))
+
+(run 10)
+
+(print-function Rename)
+(print-function Var)
+(print-function App)
