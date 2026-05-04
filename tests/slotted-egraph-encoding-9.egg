@@ -8,6 +8,7 @@
 (constructor App (String U U) U)
 (constructor Rename (Renaming U) U)
 
+
 ; shape computation for Var
 (rule
     (
@@ -22,14 +23,11 @@
 ; delete redundant vars- choose the smaller id
 (rule
     (
-        (= a (Var v1))
-        (= b (Var v2))
-        (= (Rename m a) b) 
-        (= b (ordering-max a b)) ; a < b
-        (!= a b)
+      (= (Rename m (Var n)) (Var 0))
+      (!= n 0)
     )
     (
-        (delete (Var v2))
+        (delete (Var n))
     )
 )
 

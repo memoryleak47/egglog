@@ -432,14 +432,61 @@ impl Primitive for Shape {
 #[derive(Clone, Debug)]
 struct FindMapping {}
 
+/// Helper for two nodes that are the same up to renaming on their children.
 ///
+/// Given two parallel sequences of renaming maps, returns a mapping `r` such
+/// that applying `r` to each map in the *second* sequence yields the
+/// corresponding map in the *first* sequence — i.e. for every `i`,
+/// `(apply-mapping second[i] r) == first[i]`.
 ///
-/// Finds a mapping to rename from one renaming map to another.
-/// The two maps must have the same shape (see the `shape` primitive).
-/// The output is a mapping that when applied to the second input produces the first input.
+/// Arguments are passed as a flat list `[first..., second...]` of equal-length
+/// halves. For each paired entry across the two halves, the elements are walked
+/// in parallel and `r[v_second] = v_first` is recorded. The result is returned
+/// as a `Vec i64` indexed by `v_second`.
 ///
-/// Input 1: (vec![0, 1, 0], vec![1, 2]) <- (vec![1, 2, 1], vec![2, 0])
-/// Output: vec![2, 0, 2] // zero goes to 2, one goes to 0, two goes to 1
+/// # Bails (returns `None`) when the inputs don't share a shape
+///
+/// A consistent `r` only exists when `first` and `second` have the same
+/// aliasing pattern (same `shape` — see the `shape` primitive). The check is
+/// done inline during the walk:
+///
+/// - **Second-side aliasing not in first.** Two positions in `second` hold the
+///   same value `e2` but the matching positions in `first` hold different
+///   values. There is no `r` with `r[e2]` equal to two things at once.
+/// - **First-side aliasing not in second.** Two positions in `first` hold the
+///   same value `e1` but the matching positions in `second` differ — `r` would
+///   have to collapse two distinct slots into one, so it isn't a bijection and
+///   the inverse rename wouldn't exist.
+/// - **Length mismatch** between paired vecs.
+/// - **`second` not in canonical-shape form.** The result is constructed as
+///   `result_vec[v_second] = v_first`, so `second`'s values must densely cover
+///   `0..=max`. A gap would leave an entry of `result_vec` uninitialized and
+///   silently wrong, so this is treated as a misuse and bails.
+///
+/// # Example
+///
+/// Inputs (split into two halves):
+/// ```text
+/// first  = [[0, 1, 0], [1, 2]]
+/// second = [[1, 2, 1], [2, 0]]
+/// ```
+/// Walking the pairs builds `{1 -> 0, 2 -> 1, 0 -> 2}`, so the output is:
+/// ```text
+/// [2, 0, 1]   // index 0 -> 2, index 1 -> 0, index 2 -> 1
+/// ```
+/// Verification:
+/// - `apply-mapping [1,2,1] [2,0,1] = [0,1,0]` ✓
+/// - `apply-mapping [2,0]   [2,0,1] = [1,2]`   ✓
+///
+/// # Typical use
+///
+/// When two e-nodes have identical structure but differ only in their child
+/// renamings, calling this with the renamings of the first node followed by
+/// the renamings of the second yields the rename that translates the second
+/// node's slots into the first's. Because the shape check is now built in,
+/// callers no longer need a separate `(= (shape ...) (shape ...))` guard in
+/// the rule body — a `find-mapping` call on mismatched shapes simply fails to
+/// match.
 impl Primitive for FindMapping {
     fn name(&self) -> &str {
         "find-mapping"
@@ -451,10 +498,15 @@ impl Primitive for FindMapping {
     }
 
     fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
-        let first_half = args[0..args.len() / 2].to_vec();
-        let second_half = args[args.len() / 2..].to_vec();
+        let first_half = &args[0..args.len() / 2];
+        let second_half = &args[args.len() / 2..];
 
+        // mapping: e2 -> e1; inverse: e1 -> e2.
+        // Both must be functions (no conflicts) for the two halves to share a
+        // shape. Any conflict means the renaming we'd return wouldn't be a
+        // well-defined bijection — bail.
         let mut mapping = HashMap::default();
+        let mut inverse = HashMap::default();
         let mut min = i64::MAX;
         let mut max = i64::MIN;
         for (m1, m2) in first_half.iter().zip(second_half.iter()) {
@@ -467,10 +519,23 @@ impl Primitive for FindMapping {
                 .get_val::<VecContainer>(*m2)
                 .unwrap();
 
+            if vec1.data.len() != vec2.data.len() {
+                return None;
+            }
+
             for (e1, e2) in vec1.data.iter().zip(vec2.data.iter()) {
                 let e1 = exec_state.base_values().unwrap::<i64>(*e1);
                 let e2 = exec_state.base_values().unwrap::<i64>(*e2);
-                mapping.insert(e2, e1);
+                if let Some(prev) = mapping.insert(e2, e1) {
+                    if prev != e1 {
+                        return None;
+                    }
+                }
+                if let Some(prev) = inverse.insert(e1, e2) {
+                    if prev != e2 {
+                        return None;
+                    }
+                }
                 if e2 < min {
                     min = e2;
                 }
@@ -480,7 +545,24 @@ impl Primitive for FindMapping {
             }
         }
 
-        assert_eq!(min, 0);
+        if mapping.is_empty() {
+            // No pairs to constrain; return an empty rename.
+            let result = VecContainer {
+                do_rebuild: false,
+                data: vec![],
+            };
+            return Some(
+                exec_state
+                    .container_values()
+                    .register_val(result, exec_state),
+            );
+        }
+
+        // For the second half to be a canonicalized renaming (matching shape),
+        // its values must densely cover 0..=max.
+        if min != 0 || (max as usize + 1) != mapping.len() {
+            return None;
+        }
 
         let mut result_vec = vec![0; (max + 1) as usize];
         for (k, v) in mapping.iter() {

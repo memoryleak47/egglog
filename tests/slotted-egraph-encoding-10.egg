@@ -1,0 +1,54 @@
+
+(sort Renaming (Map i64 i64))
+(sort VecOfRenaming (Vec Renaming))
+
+(sort U) ; includes terms, ids, nodes.
+
+(constructor Var (Renaming) U) ; rename 0 to var id
+(constructor App (String U Renaming U Renaming) U)
+
+
+;; Stores an eclass A, eclass B, and renaming R
+;; such that R * A = B
+;; eclass B has a lower id than eclass A.
+(relation (RenamesToLeader U U Renaming))
+
+(rule
+  ((= e1 (Var r1))
+   (= e2 (Var r2))
+   (= rename (find-mapping r1 r2)) ; renames from b to a
+   (= e2 (ordering-max e1 e2)) ; e1 < e2 
+  )
+  (
+    (RenamesToLeader e2 r1 rename)
+  )
+)
+
+; find alpha-equivalent apps using our find-mapping primitive
+(rule 
+    (
+        (= e1 (App f a a1 b b1))
+        (= e2 (App f a a2 b b2))
+        (= rename (find-mapping a1 b1 a2 b2)) ; renames from b to a
+        (= e2 (ordering-max e1 e2)) ; e1 < e2 
+    )
+    (
+        (RenamesToLeader e2 e1 rename)
+    )
+)
+
+
+
+;;; EXAMPLES ;;;
+
+(let $v1 (Var 24))
+(let $v2 (Var 12))
+
+(let $f1 (App "f" $v1 $v2))
+; (let $f2 (App "f" $v2 $v1))
+
+(run 10)
+
+(print-function RenamesToLeader)
+(print-function Var)
+(print-function App)
