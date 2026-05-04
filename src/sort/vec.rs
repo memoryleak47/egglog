@@ -168,9 +168,17 @@ impl ContainerSort for VecSort {
             }
         }
 
-        eg.add_primitive(Shape {});
-        eg.add_primitive(FindMapping {});
-        eg.add_primitive(ApplyMapping {});
+        // These three primitives operate on `Vec i64` (slot/eclass id
+        // renamings). Without this guard they'd be registered for every vec
+        // sort declared, and `AllEqualTypeConstraint` wouldn't disambiguate
+        // — calls would fail with "Ambiguous resolution".
+        if self.element.name() == "i64" {
+            eg.add_primitive(Shape {});
+            eg.add_primitive(FindMapping {
+                sort: arc.clone(),
+            });
+            eg.add_primitive(ApplyMapping {});
+        }
     }
 
     fn reconstruct_termdag(
@@ -430,7 +438,9 @@ impl Primitive for Shape {
 }
 
 #[derive(Clone, Debug)]
-struct FindMapping {}
+struct FindMapping {
+    sort: ArcSort,
+}
 
 /// Helper for two nodes that are the same up to renaming on their children.
 ///
@@ -493,8 +503,12 @@ impl Primitive for FindMapping {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
-        // must be vecs of integer sort
-        Box::new(AllEqualTypeConstraint::new("shape", span.clone()))
+        // Pin to this specific Vec sort so we don't clash with the Map-based
+        // `find-mapping` registered in `map.rs`.
+        Box::new(
+            AllEqualTypeConstraint::new("find-mapping", span.clone())
+                .with_all_arguments_sort(self.sort.clone()),
+        )
     }
 
     fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {

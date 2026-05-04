@@ -172,6 +172,15 @@ impl ContainerSort for MapSort {
         eg.add_primitive(Shape {});
         eg.add_primitive(Inverse {});
         eg.add_primitive(Compose {});
+
+        // `find-mapping` is the slotted-egraph "rename between two nodes that
+        // share a shape" helper. It only makes sense over `Map i64 i64`
+        // (slot-id → slot-id renamings), and we pin its type constraint to
+        // this specific Map sort so it doesn't clash with the Vec-based
+        // `find-mapping` registered for `Vec i64`.
+        if self.key.name() == "i64" && self.value.name() == "i64" {
+            eg.add_primitive(FindMapping { sort: arc.clone() });
+        }
     }
 
     fn reconstruct_termdag(
@@ -308,6 +317,96 @@ impl Primitive for Compose {
         );
 
         Some(map_value)
+    }
+}
+
+/// Helper for two nodes that are the same up to renaming on their children.
+///
+/// Given two parallel sequences of renaming maps `[first..., second...]`
+/// (passed flat, with equal-length halves), returns a renaming `R` such that
+/// for every `i`, applying `R` to `second[i]` yields `first[i]` — i.e.
+/// `R[second[i][k]] == first[i][k]` for every common internal slot key `k`.
+///
+/// Bails (returns `None`) when the two halves don't share a shape:
+/// - paired maps don't have the same set of keys
+/// - second-side aliasing not present in first (`R[v]` would need two values)
+/// - first-side aliasing not present in second (`R` wouldn't be a bijection)
+///
+/// The output is naturally sparse — `R` is defined exactly on the slot names
+/// that appear as values in `second`, with no padding.
+#[derive(Clone, Debug)]
+struct FindMapping {
+    sort: ArcSort,
+}
+
+impl Primitive for FindMapping {
+    fn name(&self) -> &str {
+        "find-mapping"
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+        // Pin every arg (and the output) to this specific Map sort, so we
+        // don't clash with other `find-mapping` registrations on different
+        // container kinds.
+        Box::new(
+            AllEqualTypeConstraint::new("find-mapping", span.clone())
+                .with_all_arguments_sort(self.sort.clone()),
+        )
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let first_half = &args[0..args.len() / 2];
+        let second_half = &args[args.len() / 2..];
+
+        // mapping: v_second -> v_first (the renaming we're returning).
+        // inverse: v_first -> v_second (only used to detect non-bijective collapses).
+        let mut mapping: BTreeMap<Value, Value> = BTreeMap::new();
+        let mut inverse: BTreeMap<Value, Value> = BTreeMap::new();
+
+        for (m1, m2) in first_half.iter().zip(second_half.iter()) {
+            let map1 = exec_state
+                .container_values()
+                .get_val::<MapContainer>(*m1)?
+                .clone();
+            let map2 = exec_state
+                .container_values()
+                .get_val::<MapContainer>(*m2)?
+                .clone();
+
+            // Same set of internal-slot keys. BTreeMap iteration is sorted,
+            // so equal key sets ⇒ keys() iterators agree pointwise.
+            if map1.data.len() != map2.data.len()
+                || !map1.data.keys().eq(map2.data.keys())
+            {
+                return None;
+            }
+
+            for (k, v_first) in map1.data.iter() {
+                let v_second = map2.data.get(k).unwrap();
+
+                if let Some(prev) = mapping.insert(*v_second, *v_first) {
+                    if prev != *v_first {
+                        return None;
+                    }
+                }
+                if let Some(prev) = inverse.insert(*v_first, *v_second) {
+                    if prev != *v_second {
+                        return None;
+                    }
+                }
+            }
+        }
+
+        let result = MapContainer {
+            do_rebuild_keys: false,
+            do_rebuild_vals: false,
+            data: mapping,
+        };
+        Some(
+            exec_state
+                .container_values()
+                .register_val(result, exec_state),
+        )
     }
 }
 
