@@ -65,12 +65,12 @@
 (rule 
     (
         (= a (App f (Rename m1 a1) (Rename m2 a2)))
+        (= m_sh (shape2 m1 m2))
         (= b (App f
                  (Rename (compose m_sh m1) a1)
                  (Rename (compose m_sh m2) a2)))
         ;; Another app with same shape
         (= a (Rename (inverse m_sh) b))
-        (= m_sh (shape2 m1 m2))
 
         (!= a b)
         (= b (ordering-max a b)) ; a < b
