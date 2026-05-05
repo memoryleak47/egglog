@@ -1,7 +1,7 @@
 use crate::constraint::{AllEqualTypeConstraint, NoTypeConstraint};
 
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MapContainer {
@@ -324,16 +324,22 @@ impl Primitive for Compose {
 ///
 /// Given two parallel sequences of renaming maps `[first..., second...]`
 /// (passed flat, with equal-length halves), returns a renaming `R` such that
-/// for every `i`, applying `R` to `second[i]` yields `first[i]` — i.e.
-/// `R[second[i][k]] == first[i][k]` for every common internal slot key `k`.
+/// for every `i`, applying `R` to `second[i]` yields `first[i]`.
 ///
-/// Bails (returns `None`) when the two halves don't share a shape:
-/// - paired maps don't have the same set of keys
-/// - second-side aliasing not present in first (`R[v]` would need two values)
-/// - first-side aliasing not present in second (`R` wouldn't be a bijection)
+/// Renamings use **identity-default** semantics: a key missing from a map
+/// means the map acts as the identity at that key. So for each paired
+/// `(first[i], second[i])` we walk the union of their keys, reading either
+/// side as the input key when it's missing, and derive the constraint
+/// `R(v_second) = v_first`.
 ///
-/// The output is naturally sparse — `R` is defined exactly on the slot names
-/// that appear as values in `second`, with no padding.
+/// Bails (returns `None`) when the per-pair constraints are inconsistent:
+/// - the same `v_second` is forced to two different `v_first` values
+///   (R wouldn't be a function), or
+/// - the same `v_first` is forced from two different `v_second` values
+///   (R wouldn't be injective).
+///
+/// The result is canonical: identity entries (`R(k) = k`) are not stored, so
+/// the empty map represents the identity rename.
 #[derive(Clone, Debug)]
 struct FindMapping {
     sort: ArcSort,
@@ -373,34 +379,37 @@ impl Primitive for FindMapping {
                 .get_val::<MapContainer>(*m2)?
                 .clone();
 
-            // Same set of internal-slot keys. BTreeMap iteration is sorted,
-            // so equal key sets ⇒ keys() iterators agree pointwise.
-            if map1.data.len() != map2.data.len()
-                || !map1.data.keys().eq(map2.data.keys())
-            {
-                return None;
-            }
+            // Walk the union of keys, treating missing entries as identity.
+            let keys: BTreeSet<Value> =
+                map1.data.keys().chain(map2.data.keys()).copied().collect();
+            for k in keys {
+                let v_first = map1.data.get(&k).copied().unwrap_or(k);
+                let v_second = map2.data.get(&k).copied().unwrap_or(k);
 
-            for (k, v_first) in map1.data.iter() {
-                let v_second = map2.data.get(k).unwrap();
-
-                if let Some(prev) = mapping.insert(*v_second, *v_first) {
-                    if prev != *v_first {
+                if let Some(prev) = mapping.insert(v_second, v_first) {
+                    if prev != v_first {
                         return None;
                     }
                 }
-                if let Some(prev) = inverse.insert(*v_first, *v_second) {
-                    if prev != *v_second {
+                if let Some(prev) = inverse.insert(v_first, v_second) {
+                    if prev != v_second {
                         return None;
                     }
                 }
             }
         }
 
+        // Canonicalize: drop identity entries from the result so the empty
+        // map represents the identity rename.
+        let data: BTreeMap<Value, Value> = mapping
+            .into_iter()
+            .filter(|(k, v)| k != v)
+            .collect();
+
         let result = MapContainer {
             do_rebuild_keys: false,
             do_rebuild_vals: false,
-            data: mapping,
+            data,
         };
         Some(
             exec_state
@@ -410,23 +419,32 @@ impl Primitive for FindMapping {
     }
 }
 
-// returns m1 * m2.
-// Note that m2 is applied "first". i.e. m1 * m2 * a = m1(m2(a))
-// Further note that this is a *partial compose*.
+// (compose m1 m2) is the function k -> m1(m2(k)) under identity-default
+// semantics: a missing key in either map means that map acts as the identity
+// at that point. The result map only stores non-identity entries (where the
+// composed value differs from the input key); the non-identity domain is
+// contained in m1.keys() ∪ m2.keys(), so iterating that union is sufficient.
 fn compose(m1: &BTreeMap<Value, Value>, m2: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     let mut res = BTreeMap::new();
-    for (k, v) in m2.iter() {
-        if let Some(v2) = m1.get(v) {
-            res.insert(*k, *v2);
+    let keys: BTreeSet<Value> = m1.keys().chain(m2.keys()).copied().collect();
+    for k in keys {
+        let inter = m2.get(&k).copied().unwrap_or(k);
+        let final_v = m1.get(&inter).copied().unwrap_or(inter);
+        if final_v != k {
+            res.insert(k, final_v);
         }
     }
     res
 }
 
+// Inverse under identity-default semantics. Identity entries in the input
+// (k -> k) stay identity and are dropped from the result.
 fn inverse(m1: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     let mut res = BTreeMap::new();
     for (k, v) in m1.iter() {
-        res.insert(*v, *k);
+        if k != v {
+            res.insert(*v, *k);
+        }
     }
     res
 }

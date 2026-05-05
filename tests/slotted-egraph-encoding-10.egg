@@ -12,6 +12,13 @@
 ;; eclass B has a lower id than eclass A.
 (relation RenamesToLeader (U U Renaming))
 
+
+;; transitivity
+(rule ((RenamesToLeader e1 e2 R)
+       (RenamesToLeader e2 e3 R2))
+      ((RenamesToLeader e1 e3 (compose R2 R))))
+
+
 (rule
   ((= e1 (Var id1))
    (= e2 (Var id2))
@@ -24,15 +31,78 @@
 )
 
 ; find alpha-equivalent apps using our find-mapping primitive
-(rule 
+(rule
     (
         (= e1 (App f a a1 b b1))
         (= e2 (App f a a2 b b2))
         (= rename (find-mapping a1 b1 a2 b2)) ; renames from b to a
-        (= e2 (ordering-max e1 e2)) ; e1 < e2 
+        (= e2 (ordering-max e1 e2)) ; e1 < e2
     )
     (
         (RenamesToLeader e2 e1 rename)
+    )
+)
+
+;; Migration rules.
+;;
+;; `RenamesToLeader e2 e1 R` means R * e2 = e1. We rewrite the e-node sitting
+;; in e2's e-class into the corresponding e-node in e1's e-class by pushing R
+;; through it.
+(rule
+    (
+        (RenamesToLeader e2 e1 R)
+        (= e2 (App f c1 r1 c2 r2))
+        (!= e1 e2)
+    )
+    (
+        (union e2 (App f c1 (compose R r1) c2 (compose R r2)))
+        (delete (App f c1 r1 c2 r2))
+    )
+)
+
+(rule
+    (
+        (RenamesToLeader e2 e1 R)
+        (= e2 (Var id))
+        (= new_id (map-get R id))
+        (!= e1 e2)
+    )
+    (
+        (union e2 (Var new_id))
+        (delete (Var id))
+    )
+)
+
+;; Child-rewrite rules.
+;;
+;; If an App holds child c, and `RenamesToLeader c c' R` says c is c' viewed
+;; under R (i.e. R * c = c'), the App can equivalently use c' with its edge
+;; rename adjusted: the App's view of c's slot s was r[s], and slot s in c
+;; corresponds to slot R[s] in c', so the new rename r' satisfies
+;; r'[R[s]] = r[s], giving r' = r . R^-1 = (compose r (inverse R)).
+;;
+;; One rule per child position.
+(rule
+    (
+        (RenamesToLeader c c' R)
+        (= node (App f c r1 c2 r2))
+        (!= c c')
+    )
+    (
+        (delete (App f c r1 c2 r2))
+        (union node (App f c' (compose r1 (inverse R)) c2 r2))
+    )
+)
+
+(rule
+    (
+        (RenamesToLeader c c' R)
+        (= node (App f c1 r1 c r2))
+        (!= c c')
+    )
+    (
+        (delete (App f c1 r1 c r2))
+        (union node (App f c1 r1 c' (compose r2 (inverse R))))
     )
 )
 
@@ -43,9 +113,19 @@
 (let $v1 (Var 20))
 (let $v2 (Var 1))
 
+(let $a1 (App "f" $v1 (map-empty) ;; empty map is identity
+                  $v2 (map-insert (map-empty) 1 1)))
+
+(let $a2 (App "f" $v2 (map-empty)
+                  $v1 (map-insert (map-empty) 20 20)))
+
+
 
 (run 10)
 
 (print-function RenamesToLeader)
 (print-function Var)
 (print-function App)
+
+(check (RenamesToLeader $a1 leader rename)
+       (RenamesToLeader $a2 leader rename2))
