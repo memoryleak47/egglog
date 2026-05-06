@@ -113,14 +113,17 @@
 (let $v1 (Var 20))
 (let $v2 (Var 1))
 
-(let $a1 (App "f" $v1 (map-empty) ;; empty map is identity
-                  $v2 (map-empty)))
+(let $a1 (App "f"
+              $v1 (map-insert (map-empty) 20 0)
+              $v2 (map-insert (map-empty) 1 1)))
 
-(let $a2 (App "f" $v2 (map-empty)
-                  $v1 (map-empty)))
+(let $a2 (App "f"
+              $v2 (map-insert (map-empty) 1 0)
+              $v1 (map-insert (map-empty) 20 1)))
 
-(let $a3 (App "f" $v1 (map-empty)
-                  $v1 (map-empty)))
+(let $a3 (App "f"
+              $v1 (map-insert (map-empty) 20 0)
+              $v1 (map-insert (map-empty) 20 0)))
 
 (run 10)
 

@@ -174,9 +174,10 @@ For each rewritten constructor with `n` `U`-typed positions `c_1, ..., c_n`
 ```
 
 The three derivations (`compose R r`, `compose r (inverse R)`, and
-`find-mapping`) come from the same identity-default Map semantics already
-implemented in `src/sort/map.rs`. The `(!= c_i c_i')` and `(!= e1 e2)`
-guards keep the migration from looping on self-RenamesToLeader entries.
+`find-mapping`) all use the same explicit partial-map semantics implemented
+in `src/sort/map.rs`: missing keys mean “no mapping”, not identity. The
+`(!= c_i c_i')` and `(!= e1 e2)` guards keep the migration from looping on
+self-RenamesToLeader entries.
 
 # What gets rewritten in user rules
 
@@ -331,12 +332,16 @@ section conspire to do so. This matches the behavior of encoding-10 today.
 
 Likewise, with
 ```text
-(let $a1 (App "f" $v1 (map-empty) $v2 (map-insert (map-empty) 1 1)))
-(let $a2 (App "f" $v2 (map-empty) $v1 (map-insert (map-empty) 20 20)))
+(let $a1 (App "f"
+              $v1 (map-insert (map-empty) 20 0)
+              $v2 (map-insert (map-empty) 1 1)))
+(let $a2 (App "f"
+              $v2 (map-insert (map-empty) 1 0)
+              $v1 (map-insert (map-empty) 20 1)))
 ```
 the auto-emitted α-equivalence finder and migration rules unify `$a1` and
-`$a2` (with `find-mapping` returning the empty rename under identity-
-default semantics — see `src/sort/map.rs`).
+`$a2` by matching explicit child-slot maps and deriving the outer-slot
+rename between them — see `src/sort/map.rs`.
 
 # Implementation milestones
 
@@ -384,19 +389,7 @@ the prototype was already attempting; 5 and 6 finish the loop.
    The per-sort version makes type-checking trivial; a global version
    would need a single supertype of all `U`-sorts.
 2. **Should migration unify e-classes, or just record the relation?**
-   - *Unifying migration* (encoding-10 today): the migration rule's
-     `union e2 (rewritten)` collapses α-equivalent e-classes into one.
-     `(check (= a b))` and `(check-eq-with-rename $a $b)` then succeed in
-     the same situations.
-   - *Non-unifying migration*: drop the `union` from the migration rule
-     and only emit the `RenamesToLeader_U` entry. α-equivalent classes
-     stay distinct; the structural `check` and the slotted
-     `check-eq-with-rename` give genuinely different answers. This is
-     closer to the paper's model and resolves the
-     `(Var 13) ≡ (Var 14)` surprise.
-   The encoding plan should pick one; non-unifying is the cleaner story
-   once `check-eq-with-rename` exists, since users have an explicit
-   slot-aware probe and don't need `check` to do double duty.
+   Unifying migration (encoding-10 today) means the migration rule's `union e2 (rewritten)` collapses α-equivalent e-classes into one, so `(check (= a b))` and `(check-eq-with-rename $a $b)` succeed in the same situations. Non-unifying migration drops that `union` and only emits the `RenamesToLeader_U` entry, so α-equivalent classes stay distinct and the structural `check` and slotted `check-eq-with-rename` give genuinely different answers. That is closer to the paper's model and resolves the `(Var 13) ≡ (Var 14)` surprise. The encoding plan should pick one; non-unifying is the cleaner story once `check-eq-with-rename` exists, since users have an explicit slot-aware probe and don't need `check` to do double duty.
 3. How does a user write a rule that *does* mention slots explicitly
    (e.g. an η-style rule with a freshness side condition)? Probably an
    escape hatch where the user can directly write encoded rules.

@@ -324,20 +324,17 @@ impl Primitive for Compose {
 /// (passed flat, with equal-length halves), returns a renaming `R` such that
 /// for every `i`, applying `R` to `second[i]` yields `first[i]`.
 ///
-/// Renamings use **identity-default** semantics: a key missing from a map
-/// means the map acts as the identity at that key. So for each paired
-/// `(first[i], second[i])` we walk the union of their keys, reading either
-/// side as the input key when it's missing, and derive the constraint
-/// `R(v_second) = v_first`.
+/// Renamings are treated as **explicit partial maps**. Missing keys carry no
+/// meaning, so each paired `(first[i], second[i])` must mention the same key
+/// set explicitly. For every shared key `k`, we derive the constraint
+/// `R(second[i][k]) = first[i][k]`.
 ///
 /// Bails (returns `None`) when the per-pair constraints are inconsistent:
+/// - paired maps have different explicit key sets,
 /// - the same `v_second` is forced to two different `v_first` values
 ///   (R wouldn't be a function), or
 /// - the same `v_first` is forced from two different `v_second` values
 ///   (R wouldn't be injective).
-///
-/// The result is canonical: identity entries (`R(k) = k`) are not stored, so
-/// the empty map represents the identity rename.
 fn find_mapping_data<'a>(
     pairs: impl IntoIterator<Item = (&'a BTreeMap<Value, Value>, &'a BTreeMap<Value, Value>)>,
 ) -> Option<BTreeMap<Value, Value>> {
@@ -347,11 +344,16 @@ fn find_mapping_data<'a>(
     let mut inverse: BTreeMap<Value, Value> = BTreeMap::new();
 
     for (map1, map2) in pairs {
-        // Walk the union of keys, treating missing entries as identity.
-        let keys: BTreeSet<Value> = map1.keys().chain(map2.keys()).copied().collect();
+        let keys1: BTreeSet<Value> = map1.keys().copied().collect();
+        let keys2: BTreeSet<Value> = map2.keys().copied().collect();
+        if keys1 != keys2 {
+            return None;
+        }
+
+        let keys = keys1;
         for k in keys {
-            let v_first = map1.get(&k).copied().unwrap_or(k);
-            let v_second = map2.get(&k).copied().unwrap_or(k);
+            let v_first = map1.get(&k).copied()?;
+            let v_second = map2.get(&k).copied()?;
 
             if let Some(prev) = mapping.insert(v_second, v_first) {
                 if prev != v_first {
@@ -366,9 +368,7 @@ fn find_mapping_data<'a>(
         }
     }
 
-    // Canonicalize: drop identity entries from the result so the empty
-    // map represents the identity rename.
-    Some(mapping.into_iter().filter(|(k, v)| k != v).collect())
+    Some(mapping)
 }
 
 #[derive(Clone, Debug)]
@@ -424,32 +424,25 @@ impl Primitive for FindMapping {
     }
 }
 
-// (compose m1 m2) is the function k -> m1(m2(k)) under identity-default
-// semantics: a missing key in either map means that map acts as the identity
-// at that point. The result map only stores non-identity entries (where the
-// composed value differs from the input key); the non-identity domain is
-// contained in m1.keys() ∪ m2.keys(), so iterating that union is sufficient.
+// (compose m1 m2) is ordinary partial-map composition: for each explicit
+// entry k -> v in m2, we emit k -> m1[v] if and only if m1 has an explicit
+// entry for v. Missing keys carry no identity behavior and therefore produce
+// no composed entry.
 fn compose(m1: &BTreeMap<Value, Value>, m2: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     let mut res = BTreeMap::new();
-    let keys: BTreeSet<Value> = m1.keys().chain(m2.keys()).copied().collect();
-    for k in keys {
-        let inter = m2.get(&k).copied().unwrap_or(k);
-        let final_v = m1.get(&inter).copied().unwrap_or(inter);
-        if final_v != k {
-            res.insert(k, final_v);
+    for (k, inter) in m2 {
+        if let Some(final_v) = m1.get(inter) {
+            res.insert(*k, *final_v);
         }
     }
     res
 }
 
-// Inverse under identity-default semantics. Identity entries in the input
-// (k -> k) stay identity and are dropped from the result.
+// Inverse of the explicit entries in the input map.
 fn inverse(m1: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     let mut res = BTreeMap::new();
     for (k, v) in m1.iter() {
-        if k != v {
-            res.insert(*v, *k);
-        }
+        res.insert(*v, *k);
     }
     res
 }
@@ -483,7 +476,7 @@ mod tests {
     #[test]
     fn test_find_mapping_data_0_1() {
         let first = map(&[(0, 1)]);
-        let second = map(&[]);
+        let second = map(&[(0, 0)]);
 
         let result = find_mapping_data([(&first, &second)]).unwrap();
 
@@ -517,5 +510,20 @@ mod tests {
             find_mapping_data([(&first, &second), (&first2, &second2)]),
             None
         );
+    }
+
+    #[test]
+    fn test_compose_only_uses_explicit_entries() {
+        let m1 = map(&[(1, 9)]);
+        let m2 = map(&[(0, 1), (2, 3)]);
+
+        assert_eq!(compose(&m1, &m2), map(&[(0, 9)]));
+    }
+
+    #[test]
+    fn test_inverse_preserves_explicit_identity_entries() {
+        let m = map(&[(0, 0), (1, 2)]);
+
+        assert_eq!(inverse(&m), map(&[(0, 0), (2, 1)]));
     }
 }
