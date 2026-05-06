@@ -268,6 +268,10 @@ pub struct EGraph {
     /// used for typechecking the original (pre-slotted) program, so that
     /// the main EGraph can accumulate type info from slotted-encoding symbols.
     slotted_original_typechecking: Option<Box<Self>>,
+    /// Persistent state for the slotted encoding pass — accumulates across
+    /// `resolve_command` calls so that constructors declared in one command
+    /// are visible when later commands are rewritten.
+    pub(crate) slotted_state: slotted_encoding::SlottedState,
 }
 
 /// A user-defined command allows users to inject custom command that can be called
@@ -364,6 +368,7 @@ impl Default for EGraph {
             proof_check_program: vec![],
             slotted_encoding: false,
             slotted_original_typechecking: None,
+            slotted_state: slotted_encoding::SlottedState::default(),
         };
         add_base_sort(&mut eg, UnitSort, span!()).unwrap();
         add_base_sort(&mut eg, StringSort, span!()).unwrap();

@@ -369,6 +369,10 @@ impl Primitive for FindMapping {
         let mut mapping: BTreeMap<Value, Value> = BTreeMap::new();
         let mut inverse: BTreeMap<Value, Value> = BTreeMap::new();
 
+        // Materialize each pair's data once so we can both walk and validate.
+        let mut pairs: Vec<(BTreeMap<Value, Value>, BTreeMap<Value, Value>)> =
+            Vec::with_capacity(first_half.len());
+
         for (m1, m2) in first_half.iter().zip(second_half.iter()) {
             let map1 = exec_state
                 .container_values()
@@ -397,6 +401,7 @@ impl Primitive for FindMapping {
                     }
                 }
             }
+            pairs.push((map1.data, map2.data));
         }
 
         // Canonicalize: drop identity entries from the result so the empty
@@ -405,6 +410,24 @@ impl Primitive for FindMapping {
             .into_iter()
             .filter(|(k, v)| k != v)
             .collect();
+
+        // Post-validate: the per-pair walk only iterated `m1.keys() ∪
+        // m2.keys()`, so it can miss implicit-identity constraints at slots
+        // that are in `R.keys() ∪ R.values()` but outside the pair's keys.
+        // Re-derive each pair's prediction with `compose` (which iterates
+        // `R.keys() ∪ m2.keys()`, the right domain for this check) and
+        // ensure it matches the canonicalized first-half.
+        for (a_i, b_i) in &pairs {
+            let predicted = compose(&data, b_i);
+            let canonical_first: BTreeMap<Value, Value> = a_i
+                .iter()
+                .filter(|(k, v)| k != v)
+                .map(|(k, v)| (*k, *v))
+                .collect();
+            if predicted != canonical_first {
+                return None;
+            }
+        }
 
         let result = MapContainer {
             do_rebuild_keys: false,
