@@ -1,0 +1,24 @@
+; Tests user rule rewriting where action reorders the children.
+; Each user variable's body-bound rename should follow it to the new
+; position in the action.
+
+(sort U)
+
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+
+;; user rule: f(a, b) → f(b, a) (commutativity-style)
+(rule ((= e (App "f" a b)))
+      ((union e (App "f" b a))))
+
+(let $v1 (Var 20))
+(let $v2 (Var 1))
+
+(let $a1 (App "f" $v1 $v2))
+(let $a2 (App "f" $v2 $v1))
+
+(run 10)
+
+;; $a1 and $a2 are commutativity-related, so the rule should make them
+;; share an e-class in addition to whatever the slotted machinery does.
+(check (= $a1 $a2))

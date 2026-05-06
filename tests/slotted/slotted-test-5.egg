@@ -1,0 +1,26 @@
+; Tests rule rewriting with a variable appearing at two body positions
+; via different compose paths. The rewritten rule should emit an equality
+; constraint between the two paths.
+;
+; The rule pattern is structural: the same `b` appears once nested inside
+; an inner App and once as a direct child of the outer App.
+
+(sort U)
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+
+(rule ((= e (App "f" (App "g" a b) b)))
+      ((union e (App "matched" b b))))
+
+(let $v1 (Var 5))
+(let $v2 (Var 7))
+
+;; A term where the rule definitely shouldn't trigger by accident — there
+;; are no Apps whose `b` view at the inner-g-second-child position equals
+;; the b view at the outer-f-second-child position.
+(let $not_matching (App "f" (App "g" $v1 $v2) $v1))
+
+(run 10)
+
+;; The rule shouldn't have matched on $not_matching.
+(fail (check (= $not_matching (App "matched" (Var 0) (Var 0)))))

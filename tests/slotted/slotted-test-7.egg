@@ -1,0 +1,17 @@
+; Tests that the slotted ruleset is saturated between user commands,
+; so the user doesn't need to add an explicit `(run)` before checks.
+
+(sort U)
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+
+(let $v1 (Var 5))
+(let $v2 (Var 7))
+
+(let $f1 (App "h" $v1 $v2))
+(let $f2 (App "h" $v2 $v1))
+
+;; Note: no explicit (run) before this check. The slotted maintenance
+;; schedule emitted after each top-level command should saturate the
+;; alpha-equivalence machinery.
+(check (= $f1 $f2))

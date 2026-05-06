@@ -494,7 +494,7 @@ impl EGraph {
     }
 
     /// Enable the slotted encoding for equality saturation.
-    pub(crate) fn with_slotted_encoding(mut self) -> Self {
+    pub fn with_slotted_encoding(mut self) -> Self {
         self.slotted_original_typechecking = Some(Box::new(self.clone()));
         self.slotted_encoding = true;
         self

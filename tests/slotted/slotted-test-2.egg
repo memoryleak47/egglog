@@ -1,0 +1,20 @@
+; Tests user rule rewriting: a commutativity-like rule on App.
+
+(sort U)
+
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+
+;; user-written rule: rename "f" to "g" without touching its arguments.
+(rule ((= e (App "f" a b)))
+      ((union e (App "g" a b))))
+
+(let $v1 (Var 20))
+(let $v2 (Var 1))
+
+(let $f (App "f" $v1 $v2))
+(let $g (App "g" $v1 $v2))
+
+(run 10)
+
+(check (= $f $g))

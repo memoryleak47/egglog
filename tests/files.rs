@@ -13,6 +13,9 @@ struct Run {
     /// proof_testing mode adds automatic prove-exists commands, which produce
     /// proof output that differs from normal mode. This should use separate snapshots.
     proof_testing: bool,
+    /// Enable the slotted encoding pass. Only used for tests in
+    /// `tests/slotted/`, which assume slotted-mode semantics.
+    slotted: bool,
     threads: usize,
 }
 
@@ -20,6 +23,12 @@ impl Run {
     /// Tests in the proofs directory require proofs to run successfully.
     fn requires_proofs(&self) -> bool {
         self.path.parent().unwrap().ends_with("proofs")
+    }
+
+    /// Tests in the slotted directory require the slotted encoding to run
+    /// successfully.
+    fn requires_slotted(&self) -> bool {
+        self.path.parent().unwrap().ends_with("slotted")
     }
 
     /// Extraction results may differ slightly due to the proof encoding when multiple
@@ -62,6 +71,7 @@ impl Run {
                 term_encoding: false,
                 proofs: false,
                 proof_testing: false,
+                slotted: false,
                 threads: self.threads,
             };
             let proof_check_prog = if self.proof_testing {
@@ -90,7 +100,11 @@ impl Run {
 
                     // only assert snapshot if the snapshot is non-empty
                     // proof_testing has different output due to automatic prove-exists, so no snapshot for that
-                    if !snapshot_content_across_treatments.is_empty() && !self.proof_testing {
+                    // slotted runs produce program-shape-specific output that isn't shared with non-slotted runs
+                    if !snapshot_content_across_treatments.is_empty()
+                        && !self.proof_testing
+                        && !self.slotted
+                    {
                         insta::assert_snapshot!(
                             snapshot_name_across_treatments,
                             snapshot_content_across_treatments
@@ -113,6 +127,8 @@ impl Run {
             EGraph::new_with_proofs()
         } else if self.term_encoding {
             EGraph::new_with_term_encoding()
+        } else if self.slotted {
+            EGraph::default().with_slotted_encoding()
         } else {
             EGraph::default()
         }
@@ -252,6 +268,9 @@ impl Run {
                 if self.0.proof_testing {
                     write!(f, "_proof_testing")?;
                 }
+                if self.0.slotted {
+                    write!(f, "_slotted")?;
+                }
 
                 if self.0.threads > 1 {
                     write!(f, "_{}threads", self.0.threads)?;
@@ -306,10 +325,12 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             term_encoding: false,
             proofs: false,
             proof_testing: false,
+            slotted: false,
             threads: 1,
         };
         let should_fail = run.should_fail();
         let requires_proofs = run.requires_proofs();
+        let requires_slotted = run.requires_slotted();
         // TODO: math-microbenchmark is too slow right now
         // TODO: subsume.egg fails because we used a `check` on something subsumed. Need a way to run rules over subsumed things. Same with subsume-relation.egg.
         let proof_unsupported_file_list = [
@@ -322,7 +343,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 .iter()
                 .any(|f| run.path.ends_with(f));
 
-        if !requires_proofs {
+        if !requires_proofs && !requires_slotted {
             push_trial(run.clone());
 
             push_trial(Run {
@@ -330,13 +351,13 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 ..run.clone()
             });
         }
-        if !requires_proofs && !should_fail {
+        if !requires_proofs && !requires_slotted && !should_fail {
             push_trial(Run {
                 desugar: true,
                 ..run.clone()
             });
         }
-        if !should_fail && !requires_proofs && supports_proofs {
+        if !should_fail && !requires_proofs && !requires_slotted && supports_proofs {
             push_trial(Run {
                 term_encoding: true,
                 ..run.clone()
@@ -344,14 +365,14 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         }
 
         // proofs mode (without proof_testing) should produce the same output as normal mode
-        if !should_fail && supports_proofs {
+        if !should_fail && !requires_slotted && supports_proofs {
             push_trial(Run {
                 proofs: true,
                 ..run.clone()
             });
         }
 
-        if !should_fail && supports_proofs {
+        if !should_fail && !requires_slotted && supports_proofs {
             // proof_testing mode adds automatic prove-exists, which has different output
             push_trial(Run {
                 proof_testing: true,
@@ -366,6 +387,14 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 ..run.clone()
             });
         }
+
+        // Slotted mode: only run for tests in the `slotted/` folder.
+        if requires_slotted && !should_fail {
+            push_trial(Run {
+                slotted: true,
+                ..run.clone()
+            });
+        }
     }
 
     trials
@@ -377,6 +406,11 @@ fn generate_proof_support_snapshot_test() -> Trial {
 
         for entry in glob::glob("tests/**/*.egg").unwrap() {
             let path = entry.unwrap();
+            // Skip slotted tests; they exercise a different mode and many
+            // use commands that aren't proof-supported (e.g. delete).
+            if path.parent().unwrap().ends_with("slotted") {
+                continue;
+            }
             if !file_supports_proofs(&path) && !path.parent().unwrap().ends_with("fail-typecheck") {
                 // Use just the filename for cross-platform consistency
                 let filename = path.file_name().unwrap().to_string_lossy().to_string();

@@ -1,0 +1,30 @@
+; Documents an open limitation: a body variable used only as a constructor
+; head (not as a U-child) has no body-bound edge rename. When such a
+; variable is then used as a U-child in the action, the auto-encoder
+; falls back to (map-empty) for the edge rename, which doesn't reflect
+; the variable's actual slot view.
+;
+; This test exercises a rule where `e` is matched as the head of an App
+; in the body and used as a U-child of another App in the action. The
+; check at the bottom currently passes only because the edge-rename
+; mismatch keeps the new term in a fresh e-class — i.e. the rule's
+; intended union doesn't actually identify the term we'd construct
+; outside the rule.
+
+(sort U)
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+
+(rule ((= e (App "f" a b)))
+      ((union e (App "wrap" e e))))
+
+(let $v1 (Var 5))
+(let $v2 (Var 7))
+(let $f (App "f" $v1 $v2))
+
+(run 20)
+
+;; Were head-as-child handled correctly, this would pass. It currently
+;; does not because the rule's action uses (map-empty) as the edge rename
+;; for `e`, which doesn't match the slot inference here.
+(fail (check (= $f (App "wrap" $f $f))))
