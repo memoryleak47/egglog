@@ -56,7 +56,7 @@
     )
     (
         (union e2 (App f c1 (compose R r1) c2 (compose R r2)))
-        (delete (App f c1 r1 c2 r2))
+        ;(delete (App f c1 r1 c2 r2))
     )
 )
 
@@ -68,8 +68,8 @@
         (!= e1 e2)
     )
     (
-        (union e2 (Var new_id))
-        (delete (Var id))
+        (union e1 (Var new_id))
+        ;(delete (Var id))
     )
 )
 
@@ -89,7 +89,7 @@
         (!= c c')
     )
     (
-        (delete (App f c r1 c2 r2))
+        ;(delete (App f c r1 c2 r2))
         (union node (App f c' (compose r1 (inverse R)) c2 r2))
     )
 )
@@ -101,7 +101,7 @@
         (!= c c')
     )
     (
-        (delete (App f c1 r1 c r2))
+        ;(delete (App f c1 r1 c r2))
         (union node (App f c1 r1 c' (compose r2 (inverse R))))
     )
 )
@@ -114,12 +114,13 @@
 (let $v2 (Var 1))
 
 (let $a1 (App "f" $v1 (map-empty) ;; empty map is identity
-                  $v2 (map-insert (map-empty) 1 1)))
+                  $v2 (map-empty)))
 
 (let $a2 (App "f" $v2 (map-empty)
-                  $v1 (map-insert (map-empty) 20 20)))
+                  $v1 (map-empty)))
 
-
+(let $a3 (App "f" $v1 (map-empty)
+                  $v1 (map-empty)))
 
 (run 10)
 
@@ -129,3 +130,7 @@
 
 (check (RenamesToLeader $a1 leader rename)
        (RenamesToLeader $a2 leader rename2))
+
+(fail (check (RenamesToLeader $a3 leader rename)
+             (RenamesToLeader $a1 leader rename2)))
+

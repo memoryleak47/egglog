@@ -226,9 +226,7 @@ impl Primitive for Shape {
                 .container_values()
                 .get_val::<MapContainer>(*arg)?;
             let mut kv_pairs: Vec<(Value, Value)> = m.clone().data.into_iter().collect();
-            kv_pairs.sort_by_key(|(k, _)| {
-                exec_state.base_values().unwrap::<i64>(*k)
-            });
+            kv_pairs.sort_by_key(|(k, _)| exec_state.base_values().unwrap::<i64>(*k));
 
             for (_, v) in kv_pairs {
                 if !out.contains_key(&v) {
@@ -306,7 +304,7 @@ impl Primitive for Compose {
             .container_values()
             .get_val::<MapContainer>(args[1])?
             .clone();
-        let res = compose(&&m1.data, &m2.data);
+        let res = compose(&m1.data, &m2.data);
         let map_value = exec_state.container_values().register_val(
             MapContainer {
                 do_rebuild_keys: false,
@@ -340,6 +338,39 @@ impl Primitive for Compose {
 ///
 /// The result is canonical: identity entries (`R(k) = k`) are not stored, so
 /// the empty map represents the identity rename.
+fn find_mapping_data<'a>(
+    pairs: impl IntoIterator<Item = (&'a BTreeMap<Value, Value>, &'a BTreeMap<Value, Value>)>,
+) -> Option<BTreeMap<Value, Value>> {
+    // mapping: v_second -> v_first (the renaming we're returning).
+    // inverse: v_first -> v_second (only used to detect non-bijective collapses).
+    let mut mapping: BTreeMap<Value, Value> = BTreeMap::new();
+    let mut inverse: BTreeMap<Value, Value> = BTreeMap::new();
+
+    for (map1, map2) in pairs {
+        // Walk the union of keys, treating missing entries as identity.
+        let keys: BTreeSet<Value> = map1.keys().chain(map2.keys()).copied().collect();
+        for k in keys {
+            let v_first = map1.get(&k).copied().unwrap_or(k);
+            let v_second = map2.get(&k).copied().unwrap_or(k);
+
+            if let Some(prev) = mapping.insert(v_second, v_first) {
+                if prev != v_first {
+                    return None;
+                }
+            }
+            if let Some(prev) = inverse.insert(v_first, v_second) {
+                if prev != v_second {
+                    return None;
+                }
+            }
+        }
+    }
+
+    // Canonicalize: drop identity entries from the result so the empty
+    // map represents the identity rename.
+    Some(mapping.into_iter().filter(|(k, v)| k != v).collect())
+}
+
 #[derive(Clone, Debug)]
 struct FindMapping {
     sort: ArcSort,
@@ -363,71 +394,22 @@ impl Primitive for FindMapping {
     fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let first_half = &args[0..args.len() / 2];
         let second_half = &args[args.len() / 2..];
-
-        // mapping: v_second -> v_first (the renaming we're returning).
-        // inverse: v_first -> v_second (only used to detect non-bijective collapses).
-        let mut mapping: BTreeMap<Value, Value> = BTreeMap::new();
-        let mut inverse: BTreeMap<Value, Value> = BTreeMap::new();
-
-        // Materialize each pair's data once so we can both walk and validate.
-        let mut pairs: Vec<(BTreeMap<Value, Value>, BTreeMap<Value, Value>)> =
-            Vec::with_capacity(first_half.len());
-
-        for (m1, m2) in first_half.iter().zip(second_half.iter()) {
-            let map1 = exec_state
-                .container_values()
-                .get_val::<MapContainer>(*m1)?
-                .clone();
-            let map2 = exec_state
-                .container_values()
-                .get_val::<MapContainer>(*m2)?
-                .clone();
-
-            // Walk the union of keys, treating missing entries as identity.
-            let keys: BTreeSet<Value> =
-                map1.data.keys().chain(map2.data.keys()).copied().collect();
-            for k in keys {
-                let v_first = map1.data.get(&k).copied().unwrap_or(k);
-                let v_second = map2.data.get(&k).copied().unwrap_or(k);
-
-                if let Some(prev) = mapping.insert(v_second, v_first) {
-                    if prev != v_first {
-                        return None;
-                    }
-                }
-                if let Some(prev) = inverse.insert(v_first, v_second) {
-                    if prev != v_second {
-                        return None;
-                    }
-                }
-            }
-            pairs.push((map1.data, map2.data));
-        }
-
-        // Canonicalize: drop identity entries from the result so the empty
-        // map represents the identity rename.
-        let data: BTreeMap<Value, Value> = mapping
-            .into_iter()
-            .filter(|(k, v)| k != v)
-            .collect();
-
-        // Post-validate: the per-pair walk only iterated `m1.keys() ∪
-        // m2.keys()`, so it can miss implicit-identity constraints at slots
-        // that are in `R.keys() ∪ R.values()` but outside the pair's keys.
-        // Re-derive each pair's prediction with `compose` (which iterates
-        // `R.keys() ∪ m2.keys()`, the right domain for this check) and
-        // ensure it matches the canonicalized first-half.
-        for (a_i, b_i) in &pairs {
-            let predicted = compose(&data, b_i);
-            let canonical_first: BTreeMap<Value, Value> = a_i
-                .iter()
-                .filter(|(k, v)| k != v)
-                .map(|(k, v)| (*k, *v))
-                .collect();
-            if predicted != canonical_first {
-                return None;
-            }
-        }
+        let pairs = first_half
+            .iter()
+            .zip(second_half.iter())
+            .map(|(m1, m2)| {
+                let map1 = exec_state
+                    .container_values()
+                    .get_val::<MapContainer>(*m1)?
+                    .clone();
+                let map2 = exec_state
+                    .container_values()
+                    .get_val::<MapContainer>(*m2)?
+                    .clone();
+                Some((map1.data, map2.data))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let data = find_mapping_data(pairs.iter().map(|(map1, map2)| (map1, map2)))?;
 
         let result = MapContainer {
             do_rebuild_keys: false,
@@ -470,4 +452,70 @@ fn inverse(m1: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
         }
     }
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::numeric_id::NumericId;
+
+    fn value(n: usize) -> Value {
+        Value::from_usize(n)
+    }
+
+    fn map(entries: &[(usize, usize)]) -> BTreeMap<Value, Value> {
+        entries
+            .iter()
+            .map(|(key, mapped_value)| (value(*key), value(*mapped_value)))
+            .collect()
+    }
+
+    #[test]
+    fn test_find_mapping_data_canonicalizes_identity_entries() {
+        let first = map(&[(0, 1)]);
+        let second = map(&[(0, 2)]);
+
+        let result = find_mapping_data([(&first, &second)]).unwrap();
+
+        assert_eq!(result, map(&[(2, 1)]));
+    }
+
+    #[test]
+    fn test_find_mapping_data_0_1() {
+        let first = map(&[(0, 1)]);
+        let second = map(&[]);
+
+        let result = find_mapping_data([(&first, &second)]).unwrap();
+
+        assert_eq!(result, map(&[(0, 1)]));
+    }
+
+    #[test]
+    fn test_does_not_find_mapping_differ_shape() {
+        let first = map(&[(0, 1), (1, 1)]);
+        let second = map(&[(0, 2), (1, 1)]);
+
+        assert_eq!(find_mapping_data([(&first, &second)]), None);
+    }
+
+    #[test]
+    fn test_does_find_mapping_good() {
+        let first = map(&[(0, 1)]);
+        let second = map(&[(0, 2)]);
+
+        assert_eq!(find_mapping_data([(&first, &second)]), Some(map(&[(2, 1)])));
+    }
+
+    // f(x, x), f(x, y)
+    #[test]
+    fn test_differ_shape() {
+        let first = map(&[(0, 0)]);
+        let first2 = map(&[(0, 0)]);
+        let second = map(&[(0, 0)]);
+        let second2 = map(&[(0, 1)]);
+        assert_eq!(
+            find_mapping_data([(&first, &second), (&first2, &second2)]),
+            None
+        );
+    }
 }
