@@ -1,0 +1,132 @@
+;; Hand-encoded slotted egraph using the identity-at-literal convention
+;; (each edge rename has keys = values = the child's own slot ids). Mirrors
+;; what the --slotted auto-encoder emits, but written out by hand so this
+;; file runs without the --slotted flag. Covers four α-equivalence cases:
+;;
+;;   1. Swap of two free variables:
+;;        (App "f" v1 v2)  ≡  (App "f" v2 v1)
+;;   2. Cyclic permutation of three variables, nested:
+;;        (App "f" (App "g" v1 v2) v3)  ≡  (App "f" (App "g" v3 v1) v2)
+;;   3. Same shape, different slot ids:
+;;        (App "f" v1 v1)  ≡  (App "f" v2 v2)
+;;   4. Negative — different free-slot counts should not unify:
+;;        (App "f" v1 v1)  ≢  (App "f" v1 v2)
+;;
+;; The machinery (Renaming, RenamesToLeader, transitivity, leaf pair,
+;; α-finder, migration, child-rewrites) is the same shape as the docs in
+;; src/slotted_encoding.md.
+
+
+;;; Machinery ;;;
+
+(sort Renaming (Map i64 i64))
+
+(sort U)
+
+(constructor Var (i64) U)
+(constructor App (String U Renaming U Renaming) U)
+
+;; R * e2 = e1, with e1 < e2 by id.
+(relation RenamesToLeader (U U Renaming))
+
+;; transitivity
+(rule ((RenamesToLeader e1 e2 R)
+       (RenamesToLeader e2 e3 R2))
+      ((RenamesToLeader e1 e3 (compose R2 R))))
+
+;; leaf pair rule (no leaf-side migration — leaves stay distinct).
+(rule ((= e1 (Var id1))
+       (= e2 (Var id2))
+       (!= id1 id2)
+       (= e2 (ordering-max e1 e2)))
+      ((RenamesToLeader e2 e1
+                        (map-insert (map-empty) id2 id1))))
+
+;; α-finder: two App nodes with the same head and same children, related
+;; by a single bijection on their edge renames.
+(rule ((= e1 (App f c1 a1 c2 a2))
+       (= e2 (App f c1 b1 c2 b2))
+       (= rename (find-mapping a1 a2 b1 b2))
+       (= e2 (ordering-max e1 e2)))
+      ((RenamesToLeader e2 e1 rename)))
+
+;; migration: push R through every edge rename of e2.
+(rule ((RenamesToLeader e2 e1 R)
+       (= e2 (App f c1 r1 c2 r2))
+       (!= e1 e2))
+      ((union e2 (App f c1 (compose R r1) c2 (compose R r2)))))
+
+;; per-position child rewrites.
+(rule ((RenamesToLeader c c' R)
+       (= node (App f c r1 c2 r2))
+       (!= c c'))
+      ((union node (App f c' (compose r1 (inverse R)) c2 r2))))
+
+(rule ((RenamesToLeader c c' R)
+       (= node (App f c1 r1 c r2))
+       (!= c c'))
+      ((union node (App f c1 r1 c' (compose r2 (inverse R))))))
+
+
+;;; Case 1: swap of two free variables ;;;
+
+(let $v1 (Var 20))
+(let $v2 (Var 1))
+
+(let $a1 (App "f" $v1 (map-insert (map-empty) 20 20)
+                  $v2 (map-insert (map-empty)  1  1)))
+
+(let $a2 (App "f" $v2 (map-insert (map-empty)  1  1)
+                  $v1 (map-insert (map-empty) 20 20)))
+
+
+;;; Case 2: three-variable cyclic permutation, nested ;;;
+
+(let $w1 (Var 100))
+(let $w2 (Var 200))
+(let $w3 (Var 300))
+
+(let $b1 (App "f"
+              (App "g" $w1 (map-insert (map-empty) 100 100)
+                       $w2 (map-insert (map-empty) 200 200))
+              (map-insert (map-insert (map-empty) 100 100) 200 200)
+              $w3 (map-insert (map-empty) 300 300)))
+
+(let $b2 (App "f"
+              (App "g" $w3 (map-insert (map-empty) 300 300)
+                       $w1 (map-insert (map-empty) 100 100))
+              (map-insert (map-insert (map-empty) 100 100) 300 300)
+              $w2 (map-insert (map-empty) 200 200)))
+
+
+;;; Case 3: same shape, different slot ids ;;;
+
+(let $u1 (Var 50))
+(let $u2 (Var 60))
+
+(let $c1 (App "h" $u1 (map-insert (map-empty) 50 50)
+                  $u1 (map-insert (map-empty) 50 50)))
+
+(let $c2 (App "h" $u2 (map-insert (map-empty) 60 60)
+                  $u2 (map-insert (map-empty) 60 60)))
+
+
+;;; Case 4 (negative): different free-slot counts ;;;
+
+(let $d1 (App "k" $u1 (map-insert (map-empty) 50 50)
+                  $u1 (map-insert (map-empty) 50 50)))
+
+(let $d2 (App "k" $u1 (map-insert (map-empty) 50 50)
+                  $u2 (map-insert (map-empty) 60 60)))
+
+
+(run 20)
+
+
+;; positives
+(check (= $a1 $a2))
+(check (= $b1 $b2))
+(check (= $c1 $c2))
+
+;; negative — should remain in distinct e-classes.
+(fail (check (= $d1 $d2)))

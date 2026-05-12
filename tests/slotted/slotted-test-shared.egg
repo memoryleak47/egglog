@@ -1,0 +1,27 @@
+; Probes shared-variable identity across nested compounds: a user rule
+; whose pattern has the same `b` appearing both inside an inner App and
+; as a sibling of that inner App. The rule should fire on a term where
+; the two occurrences point at the same variable, exercising the
+; encoding's preservation of slot identity through nesting.
+
+(sort U)
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+
+;; (App "wrap" (App "g" a b) b)  ->  (App "h" b b)
+(rule ((= e (App "wrap" (App "g" a b) b)))
+      ((union e (App "h" b b))))
+
+(let $v1 (Var 5))
+(let $v2 (Var 7))
+
+;; matching: outer second child IS v2, inner second child IS v2 — same var.
+(let $matching (App "wrap" (App "g" $v1 $v2) $v2))
+
+;; non-matching: outer second child is v1, inner second child is v2.
+(let $not_matching (App "wrap" (App "g" $v1 $v2) $v1))
+
+(run 10)
+
+;; matching should have the rewrite applied
+(check (= $matching (App "h" $v2 $v2)))

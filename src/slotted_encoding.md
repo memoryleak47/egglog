@@ -200,30 +200,41 @@ Mirroring the proof/term encoding, the pass appends
 after every top-level command except `Function` (let/relation/constructor
 declarations), `NormRule`, `Sort`, and ruleset declarations. This keeps
 slotted invariants saturated whenever new e-graph data is introduced
-(let-binding `set`s, standalone expressions, user `(run)`s, etc.), so a
-user can write `(check (= $a $b))` straight after a `(let ...)` without
-needing to `(run)` first.
+(let-binding `set`s, standalone expressions, etc.), so a user can write
+`(check (= $a $b))` straight after a `(let ...)` without needing to `(run)`
+first.
+
+Additionally, **user `RunSchedule` commands are instrumented** to fire
+`(saturate slotted)` after each iteration: each `Run` node inside the
+schedule tree gets wrapped as `(seq run (saturate slotted))`. So during a
+long user `(run N)`, slotted machinery is applied to whatever the user's
+own rules produce per iteration, not just at the end.
 
 # What gets rewritten in user expressions
 
 Top-level user expressions (let-binding values, standalone expressions,
 check arguments, action expressions in `CoreAction` commands) get
-**slot-inferred edge renames**, so that `(App "f" (Var 20) (Var 1))` is
-emitted as
+**slot-inferred edge renames**. The convention is **identity-at-literal**:
+each U-child's edge rename has keys *and* values both equal to the child's
+own slot list. So `(App "f" (Var 20) (Var 1))` is emitted as
 
 ```text
-(App "f" (Var 20) (map-insert (map-empty) 20 0)
+(App "f" (Var 20) (map-insert (map-empty) 20 20)
          (Var 1)  (map-insert (map-empty) 1  1))
 ```
 
-— the same shape encoding-10 expects by hand. The pass walks each
-expression and assigns sequential App-slots `0, 1, ..., k-1` to the distinct
-outer slots its U-children reference (in encounter order). Same-variable
-references in different positions of the same App get the same App-slot
-(so `(App "f" $v1 $v1)` ends up as `(App "f" $v1 {n:0} $v1 {n:0})`). Each
-let-binding's outer-slot list is recorded so subsequent expressions
-referencing it can use the canonical `[0..k-1]` slot space as their child
-slots.
+The compound's outer slot list is the deduped union of its U-children's
+slot lists in encounter order. Same-variable references at different
+child positions naturally reuse the same slot id (so `(App "f" $v1 $v1)`
+ends up as `(App "f" $v1 {n:n} $v1 {n:n})` for whatever `n` is `$v1`'s
+slot). Each let-binding's outer slot list is recorded so subsequent
+expressions referencing it can use those slots as keys when building
+their own edge renames.
+
+Identity-at-literal matches the convention encoding-10 uses by hand and
+matches the action-side synthesis below — top-level and rules emit the
+*same* encoded form for the *same* user term. Slot ids are arbitrary;
+no canonical `[0..k-1]` space is enforced.
 
 # What gets rewritten in user rules
 
@@ -245,9 +256,13 @@ Mechanically:
    atom), the paths must all describe the same effective slot view, so we
    emit `(= path_i path_j)` constraints between consecutive pairs.
 3. **Action**: each user-variable U-child reuses the variable's first
-   body path as its edge rename. Variables that don't appear as U-children
-   in the body (e.g., matched as a constructor head only) fall back to
-   `(map-empty)` — see *Limitations* below.
+   body path as its edge rename. For variables that *only* appear as a
+   constructor head in the body (e.g. `(= e (App "f" a b))`), no path is
+   collected, but the body-bound child renames `r_a, r_b, ...` are. The
+   pass synthesizes the identity rename over the union of their value
+   sets via `(map-union (compose r_a (inverse r_a)) (compose r_b (inverse r_b)) ...)`
+   and uses that as the edge rename in actions. Variables with neither a
+   path nor head matches fall back to `(map-empty)`.
 
 This is operationally similar to what the wrapper-style prototype
 (`b38a2f71:src/slotted_encoding.rs` in the git history) did, but expressed
@@ -266,9 +281,14 @@ in the current implementation.
 
 # Worked examples
 
-The examples below correspond directly to tests in `tests/slotted/`. The
-"before" block is what the user types; the "after" block is what the
-slotted-encoding pass emits (modulo names of fresh renaming variables).
+A larger collection lives in
+[`src/slotted_encoding_examples.md`](crate::slotted_encoding_examples) —
+ten before/after pairs covering constructor renaming, commutativity, path
+equality, head-as-child synthesis, shared-variable cases, and the two
+"intended" examples for #16 (literal leaf in action, nested fresh
+compound). The four below are a quick on-ramp; for the full set, see that
+file. Each example's "before" is what the user types; the "after" is what
+the pass emits, modulo fresh-variable names.
 
 ## Example A — Constructor declaration with `U` children
 
@@ -306,17 +326,18 @@ Before (slotted-test-1.egg):
 ```
 After: each `let` is followed by an automatic
 `(run-schedule (saturate slotted))`, and every constructor application has
-its inferred edge renames inserted:
+its identity-at-literal edge renames inserted:
 ```text
 (let $a1 (App "f"
-              $v1 (map-insert (map-empty) 20 0)
+              $v1 (map-insert (map-empty) 20 20)
               $v2 (map-insert (map-empty) 1  1)))
 (let $a2 (App "f"
-              $v2 (map-insert (map-empty) 1  0)
-              $v1 (map-insert (map-empty) 20 1)))
+              $v2 (map-insert (map-empty) 1  1)
+              $v1 (map-insert (map-empty) 20 20)))
 ;; (check passes after the maintenance schedule fires the leaf pair rule
-;; and child-rewrite rules; congruence unifies $a1 and $a2 via their
-;; shared canonical e-node.)
+;; and child-rewrite rules; child-rewrite produces matching edge-rename
+;; orbits, the App α-finder ties them together via find-mapping, and
+;; migration unions $a1 and $a2.)
 ```
 
 ## Example D — User commutativity rule (slotted-test-3.egg)
@@ -357,23 +378,7 @@ App directly to `b`).
 
 # Limitations
 
-- **Variable used as constructor head, then as U-child in action.** The
-  body records edge renames only for variables matched at a U-child
-  position. A variable matched as a constructor *head* (`(= e (App ...))`)
-  has no body-bound rename — when the action then uses `e` as a U-child of
-  some other constructor, the pass falls back to `(map-empty)` for the
-  edge rename. The semantically correct value would be the identity rename
-  on `e`'s slot space, which we can't synthesize statically. Documented in
-  `tests/slotted/slotted-test-6.egg` via a `(fail (check ...))`.
-- **Action-side new constructions disjoint from body shape**. When the
-  action introduces a new constructor with U-children that don't share a
-  matched body variable, the pass falls back to `(map-empty)` for those
-  edge renames.
-- **Shared variable identity across nested compound children.** Slot
-  inference treats each compound's children as having their own canonical
-  `[0..k-1]` slot space, so a variable that appears both inside a
-  let-bound subterm and again as a sibling of that subterm gets distinct
-  slots in the outer parent, even when the user might expect them shared.
+(none currently — see *Open questions* for things worth tightening.)
 
 # Out of scope (later milestones)
 
@@ -395,19 +400,17 @@ App directly to `b`).
 
 # Open questions
 
-1. One `RenamesToLeader_<sort>` relation per `U`-sort, or one global one?
-   The per-sort version makes type-checking trivial; a global version
-   would need a single supertype of all `U`-sorts.
-2. How does a user write a rule that *does* mention slots explicitly
-   (e.g. an η-style rule with a freshness side condition)? Probably an
-   escape hatch where the user can directly write encoded rules.
-3. What's the right semantics for the head-as-child-in-action limitation?
-   Synthesizing an "identity on `e`'s slot space" rename would require
-   knowing `e`'s slots at rule-firing time. Possible directions: a
-   primitive that returns "self-rename of an e-class," or a syntactic
-   restriction in the user surface.
-4. Does the maintenance schedule need to fire *inside* user `(run N)`
-   schedules too, or is post-command saturation enough? Currently slotted
-   rules are in the `slotted` ruleset (not the default), so user `(run)`
-   doesn't fire them — only the maintenance does. Worked for every test
-   so far, but worth a closer look once larger user programs exist.
+1. **(decided)** One `RenamesToLeader_<sort>` relation per `U`-sort.
+2. **(decided)** Identity-at-literal, not canonical `[0..k-1]`. Slot ids are
+   arbitrary; the convention is that every U-child's edge rename has equal
+   keys and values, equal to the child's own slot list. Under this
+   convention, shared-variable identity is preserved through arbitrary
+   nesting in user expressions and rules — exercised in
+   `tests/slotted/slotted-test-shared.egg`.
+3. **Tightening (open)**: when a variable is matched as both a constructor
+   head *and* a U-child in a rule body, currently the path takes
+   precedence silently — no body fact ties the path's slot view to the
+   head-implied slot space. Should we emit
+   `(= path synthesized_head_identity)` to force them to agree?
+   Same question for a variable matched as a head in multiple body atoms:
+   should the head-rename sets across atoms be constrained equal?

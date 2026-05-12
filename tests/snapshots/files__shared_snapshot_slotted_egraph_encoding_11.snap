@@ -1,0 +1,8 @@
+---
+source: tests/files.rs
+assertion_line: 108
+expression: snapshot_content_across_treatments
+---
+((App 231)
+ (RenamesToLeader 47)
+ (Var 7))

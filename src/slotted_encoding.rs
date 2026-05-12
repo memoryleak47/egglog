@@ -394,8 +394,57 @@ impl<'a> SlottedInstrumentor<'a> {
             Rule { rule } => Rule {
                 rule: self.rewrite_user_rule(rule),
             },
+            RunSchedule(schedule) => {
+                // Mirror proof_encoding: wrap each `(run ...)` inside the
+                // schedule tree so that `(saturate slotted)` runs after
+                // every iteration. This keeps the slotted ruleset current
+                // with state produced inside long user runs, not just
+                // between top-level commands.
+                RunSchedule(self.instrument_schedule(schedule))
+            }
             other => other,
         }
+    }
+
+    fn instrument_schedule(
+        &mut self,
+        schedule: crate::ast::Schedule,
+    ) -> crate::ast::Schedule {
+        use crate::ast::GenericSchedule::*;
+        match schedule {
+            Run(span, config) => {
+                let saturate = self.saturate_slotted(span.clone());
+                Sequence(span.clone(), vec![Run(span, config), saturate])
+            }
+            Saturate(span, inner) => {
+                Saturate(span, Box::new(self.instrument_schedule(*inner)))
+            }
+            Repeat(span, n, inner) => {
+                Repeat(span, n, Box::new(self.instrument_schedule(*inner)))
+            }
+            Sequence(span, items) => Sequence(
+                span,
+                items
+                    .into_iter()
+                    .map(|s| self.instrument_schedule(s))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Returns a `(saturate slotted)` schedule fragment.
+    fn saturate_slotted(&mut self, span: Span) -> crate::ast::Schedule {
+        use crate::ast::GenericSchedule::*;
+        Saturate(
+            span.clone(),
+            Box::new(Run(
+                span,
+                crate::ast::GenericRunConfig {
+                    ruleset: "slotted".to_string(),
+                    until: None,
+                },
+            )),
+        )
     }
 
     fn rewrite_fact(&mut self, fact: crate::ast::Fact) -> crate::ast::Fact {
@@ -478,10 +527,15 @@ impl<'a> SlottedInstrumentor<'a> {
         rule: crate::ast::GenericRule<String, String>,
     ) -> crate::ast::GenericRule<String, String> {
         let mut var_paths: HashMap<String, Vec<Expr>> = HashMap::default();
+        // Variables matched as constructor heads in the body. Each head match
+        // contributes its body-bound child rename names; the variable's
+        // *slot space* is the union of values across these renames, and its
+        // identity rename is identity over that slot space.
+        let mut head_renames: HashMap<String, Vec<String>> = HashMap::default();
         let mut new_body: Vec<crate::ast::Fact> = rule
             .body
             .into_iter()
-            .map(|f| self.rewrite_body_fact(f, &mut var_paths))
+            .map(|f| self.rewrite_body_fact(f, &mut var_paths, &mut head_renames))
             .collect();
         // Add equality constraints between pairs of paths for variables
         // observed at multiple positions.
@@ -494,11 +548,21 @@ impl<'a> SlottedInstrumentor<'a> {
                 ));
             }
         }
-        // For action use: pick each variable's first observed path.
-        let var_to_path: HashMap<String, Expr> = var_paths
+        // For action use: pick each variable's first observed path. For
+        // variables that have *only* head matches (no path), synthesize the
+        // identity rename over the union of body-bound rename value-sets.
+        let mut var_to_path: HashMap<String, Expr> = var_paths
             .into_iter()
             .filter_map(|(v, mut paths)| paths.drain(..).next().map(|p| (v, p)))
             .collect();
+        for (var, renames) in &head_renames {
+            if var_to_path.contains_key(var) {
+                continue;
+            }
+            if let Some(id_expr) = synthesize_identity(rule.span.clone(), renames) {
+                var_to_path.insert(var.clone(), id_expr);
+            }
+        }
         let new_head: Vec<crate::ast::Action> = rule
             .head
             .0
@@ -528,21 +592,131 @@ fn compose_path(span: Span, outer: Option<Expr>, inner: Expr) -> Expr {
     }
 }
 
+/// Synthesize an identity rename over the union of the value-sets of the
+/// given body-bound rename variables. For one rename `r`, that's
+/// `(compose r (inverse r))` (identity over `values(r)`); for several, we
+/// fold via `(map-union ...)`.
+///
+/// Returns `None` if the rename list is empty (caller falls back to
+/// `(map-empty)`).
+fn synthesize_identity(span: Span, renames: &[String]) -> Option<Expr> {
+    let mut iter = renames.iter();
+    let first = iter.next()?;
+    let mut acc = id_on_values(span.clone(), first);
+    for r in iter {
+        acc = GenericExpr::Call(
+            span.clone(),
+            "map-union".to_string(),
+            vec![acc, id_on_values(span.clone(), r)],
+        );
+    }
+    Some(acc)
+}
+
+/// `compose r (inverse r)` — identity over `values(r)`.
+fn id_on_values(span: Span, rename_var: &str) -> Expr {
+    let r = GenericExpr::Var(span.clone(), rename_var.to_string());
+    let inv_r = GenericExpr::Call(span.clone(), "inverse".to_string(), vec![r.clone()]);
+    GenericExpr::Call(span, "compose".to_string(), vec![r, inv_r])
+}
+
+/// `(map-insert (map-empty) k k)` — identity at a single literal slot.
+fn identity_at(span: Span, k: i64) -> Expr {
+    GenericExpr::Call(
+        span.clone(),
+        "map-insert".to_string(),
+        vec![
+            GenericExpr::Call(span.clone(), "map-empty".to_string(), Vec::new()),
+            GenericExpr::Lit(span.clone(), Literal::Int(k)),
+            GenericExpr::Lit(span, Literal::Int(k)),
+        ],
+    )
+}
+
+/// Like `synthesize_identity` but takes a slice of arbitrary edge-rename
+/// `Expr`s instead of body-bound rename variable names. Returns identity
+/// over the union of each edge's value-set, built as
+/// `(map-union (compose e1 (inverse e1)) (compose e2 (inverse e2)) ...)`.
+/// Returns `None` if the slice is empty.
+fn synthesize_identity_from_exprs(span: Span, edges: &[Expr]) -> Option<Expr> {
+    let mut iter = edges.iter();
+    let first = iter.next()?;
+    let mut acc = id_on_values_expr(span.clone(), first.clone());
+    for e in iter {
+        acc = GenericExpr::Call(
+            span.clone(),
+            "map-union".to_string(),
+            vec![acc, id_on_values_expr(span.clone(), e.clone())],
+        );
+    }
+    Some(acc)
+}
+
+/// `compose e (inverse e)` — identity over `values(e)`, generalized over
+/// arbitrary `Expr` (not just a variable name like [`id_on_values`]).
+fn id_on_values_expr(span: Span, edge: Expr) -> Expr {
+    let inv = GenericExpr::Call(span.clone(), "inverse".to_string(), vec![edge.clone()]);
+    GenericExpr::Call(span, "compose".to_string(), vec![edge, inv])
+}
+
 impl<'a> SlottedInstrumentor<'a> {
 
     fn rewrite_body_fact(
         &mut self,
         fact: crate::ast::Fact,
         var_paths: &mut HashMap<String, Vec<Expr>>,
+        head_renames: &mut HashMap<String, Vec<String>>,
     ) -> crate::ast::Fact {
         use crate::ast::GenericFact::*;
         match fact {
-            Eq(span, lhs, rhs) => Eq(
-                span,
-                self.rewrite_body_expr(lhs, None, var_paths),
-                self.rewrite_body_expr(rhs, None, var_paths),
-            ),
-            Fact(e) => Fact(self.rewrite_body_expr(e, None, var_paths)),
+            Eq(span, lhs, rhs) => {
+                // Detect head matches: `(= var Call)` or `(= Call var)`,
+                // where `Call` is a rewritten constructor. The Var is then
+                // matched as the head e-class of that Call, and its slot
+                // space is determined by the Call's child renames.
+                let head_for_rhs = match (&lhs, &rhs) {
+                    (GenericExpr::Var(_, name), GenericExpr::Call(_, ch, _))
+                        if self
+                            .egraph
+                            .slotted_state
+                            .rewritten_ctors
+                            .contains_key(ch) =>
+                    {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                };
+                let head_for_lhs = match (&lhs, &rhs) {
+                    (GenericExpr::Call(_, ch, _), GenericExpr::Var(_, name))
+                        if self
+                            .egraph
+                            .slotted_state
+                            .rewritten_ctors
+                            .contains_key(ch) =>
+                    {
+                        Some(name.clone())
+                    }
+                    _ => None,
+                };
+                Eq(
+                    span,
+                    self.rewrite_body_expr(
+                        lhs,
+                        None,
+                        head_for_lhs.as_deref(),
+                        var_paths,
+                        head_renames,
+                    ),
+                    self.rewrite_body_expr(
+                        rhs,
+                        None,
+                        head_for_rhs.as_deref(),
+                        var_paths,
+                        head_renames,
+                    ),
+                )
+            }
+            Fact(e) => Fact(self.rewrite_body_expr(e, None, None, var_paths, head_renames)),
         }
     }
 
@@ -557,7 +731,9 @@ impl<'a> SlottedInstrumentor<'a> {
         &mut self,
         expr: Expr,
         current_path: Option<Expr>,
+        head_var: Option<&str>,
         var_paths: &mut HashMap<String, Vec<Expr>>,
+        head_renames: &mut HashMap<String, Vec<String>>,
     ) -> Expr {
         match expr {
             GenericExpr::Var(span, v) => {
@@ -576,22 +752,27 @@ impl<'a> SlottedInstrumentor<'a> {
                     .cloned()
                 {
                     let mut new_args: Vec<Expr> = Vec::with_capacity(args.len() * 2);
+                    let mut this_call_renames: Vec<String> = Vec::new();
                     for (arg, &is_u) in args.into_iter().zip(mask.iter()) {
                         if is_u {
                             // Generate a fresh edge-rename pattern variable
                             // for this U-child position.
                             let fresh = self.fresh_rename_var();
-                            let fresh_var = GenericExpr::Var(span.clone(), fresh.clone());
+                            this_call_renames.push(fresh.clone());
+                            let fresh_var = GenericExpr::Var(span.clone(), fresh);
                             // Build the path that descends into this child.
                             let child_path = compose_path(
                                 span.clone(),
                                 current_path.clone(),
                                 fresh_var.clone(),
                             );
+                            // Children are not heads of this call; clear head_var.
                             let new_arg = self.rewrite_body_expr(
                                 arg,
                                 Some(child_path),
+                                None,
                                 var_paths,
+                                head_renames,
                             );
                             new_args.push(new_arg);
                             new_args.push(fresh_var);
@@ -601,17 +782,33 @@ impl<'a> SlottedInstrumentor<'a> {
                             let new_arg = self.rewrite_body_expr(
                                 arg,
                                 current_path.clone(),
+                                None,
                                 var_paths,
+                                head_renames,
                             );
                             new_args.push(new_arg);
                         }
+                    }
+                    // Record this call's child rename names against the head
+                    // variable, if there was one.
+                    if let Some(hv) = head_var {
+                        head_renames
+                            .entry(hv.to_string())
+                            .or_default()
+                            .extend(this_call_renames);
                     }
                     GenericExpr::Call(span, head, new_args)
                 } else {
                     let new_args: Vec<Expr> = args
                         .into_iter()
                         .map(|a| {
-                            self.rewrite_body_expr(a, current_path.clone(), var_paths)
+                            self.rewrite_body_expr(
+                                a,
+                                current_path.clone(),
+                                None,
+                                var_paths,
+                                head_renames,
+                            )
                         })
                         .collect();
                     GenericExpr::Call(span, head, new_args)
@@ -659,10 +856,51 @@ impl<'a> SlottedInstrumentor<'a> {
         expr: Expr,
         var_to_path: &HashMap<String, Expr>,
     ) -> Expr {
+        let (rewritten, _outgoing) = self.rewrite_action_expr_with_outgoing(expr, var_to_path);
+        rewritten
+    }
+
+    /// Rewrite an action expression and return both:
+    /// - the rewritten `Expr`, and
+    /// - an `Option<Expr>` for the term's *outgoing rename*: a Map
+    ///   expression that, at runtime, evaluates to the rename used at this
+    ///   term's edge position when it sits as a U-child of some parent.
+    ///
+    /// Synthesis follows the runtime, no-canonical-assumption shape laid
+    /// out in `slotted_encoding_examples.md`:
+    ///
+    /// - **User variable with a body path**: outgoing = the path.
+    /// - **Literal atomic-id leaf** like `(Var k)` with `k: Lit::Int`:
+    ///   outgoing = `(map-insert (map-empty) k k)` — identity at slot `k`.
+    /// - **Nested rewritten compound**: outgoing = identity over the union
+    ///   of values across the inner edges, computed via `map-union` of
+    ///   `compose-inverse` chains over each U-child's own outgoing rename.
+    /// - Anything else: `None` (no outgoing). Caller falls back to
+    ///   `(map-empty)` when an edge rename is needed.
+    fn rewrite_action_expr_with_outgoing(
+        &self,
+        expr: Expr,
+        var_to_path: &HashMap<String, Expr>,
+    ) -> (Expr, Option<Expr>) {
         match expr {
-            GenericExpr::Var(span, v) => GenericExpr::Var(span, v),
-            GenericExpr::Lit(span, lit) => GenericExpr::Lit(span, lit),
+            GenericExpr::Var(span, v) => {
+                let outgoing = var_to_path.get(&v).cloned();
+                (GenericExpr::Var(span, v), outgoing)
+            }
+            GenericExpr::Lit(span, lit) => (GenericExpr::Lit(span, lit), None),
             GenericExpr::Call(span, head, args) => {
+                // Atomic-id leaf with a literal i64 arg: outgoing rename is
+                // identity at the literal slot.
+                if self.egraph.slotted_state.leaf_ctors.contains(&head) {
+                    if let Some(GenericExpr::Lit(_, Literal::Int(n))) = args.first() {
+                        let outgoing = identity_at(span.clone(), *n);
+                        return (
+                            GenericExpr::Call(span, head, args),
+                            Some(outgoing),
+                        );
+                    }
+                }
+
                 if let Some(mask) = self
                     .egraph
                     .slotted_state
@@ -671,39 +909,41 @@ impl<'a> SlottedInstrumentor<'a> {
                     .cloned()
                 {
                     let mut new_args: Vec<Expr> = Vec::with_capacity(args.len() * 2);
+                    let mut child_outgoings: Vec<Expr> = Vec::new();
                     for (arg, &is_u) in args.into_iter().zip(mask.iter()) {
-                        let rewritten_arg = self.rewrite_action_expr(arg, var_to_path);
-                        let rename_expr = if is_u {
-                            match &rewritten_arg {
-                                GenericExpr::Var(_, name) => match var_to_path.get(name) {
-                                    Some(p) => Some(p.clone()),
-                                    None => Some(GenericExpr::Call(
-                                        span.clone(),
-                                        "map-empty".to_string(),
-                                        Vec::new(),
-                                    )),
-                                },
-                                _ => Some(GenericExpr::Call(
+                        let (rewritten_arg, child_outgoing) =
+                            self.rewrite_action_expr_with_outgoing(arg, var_to_path);
+                        if is_u {
+                            // Edge rename at this position = child's
+                            // outgoing rename. If the child has none (e.g.
+                            // unrecognised non-leaf call), fall back to an
+                            // empty map.
+                            let edge = child_outgoing.clone().unwrap_or_else(|| {
+                                GenericExpr::Call(
                                     span.clone(),
                                     "map-empty".to_string(),
                                     Vec::new(),
-                                )),
+                                )
+                            });
+                            new_args.push(rewritten_arg);
+                            new_args.push(edge);
+                            if let Some(out) = child_outgoing {
+                                child_outgoings.push(out);
                             }
                         } else {
-                            None
-                        };
-                        new_args.push(rewritten_arg);
-                        if let Some(re) = rename_expr {
-                            new_args.push(re);
+                            new_args.push(rewritten_arg);
                         }
                     }
-                    GenericExpr::Call(span, head, new_args)
+                    // The compound's own outgoing rename = identity over
+                    // the union of values across all its U-edge renames.
+                    let outgoing = synthesize_identity_from_exprs(span.clone(), &child_outgoings);
+                    (GenericExpr::Call(span, head, new_args), outgoing)
                 } else {
                     let new_args: Vec<Expr> = args
                         .into_iter()
                         .map(|a| self.rewrite_action_expr(a, var_to_path))
                         .collect();
-                    GenericExpr::Call(span, head, new_args)
+                    (GenericExpr::Call(span, head, new_args), None)
                 }
             }
         }
@@ -761,10 +1001,19 @@ impl<'a> SlottedInstrumentor<'a> {
         }
     }
 
-    /// Rewrite a call to a compound (rewritten) constructor: walk each U-typed
-    /// child to gather its outer slots, assign each distinct slot a sequential
-    /// App-slot, build edge renames, and return both the rewritten call and
-    /// the App's own outer slot list (`[0, 1, ..., k-1]`).
+    /// Rewrite a call to a compound (rewritten) constructor.
+    ///
+    /// Each U-typed child gets an **identity-at-its-slots** edge rename:
+    /// for child slot list `[s_1, ..., s_k]`, the edge rename is
+    /// `(map-insert ... (map-empty) s_i s_i)`. The compound's own outer
+    /// slot list is the deduped union of its U-children's slot lists.
+    ///
+    /// This identity-at-literal convention matches the action-side
+    /// synthesis used in `rewrite_action_expr_with_outgoing` (literal
+    /// leaves emit `(map-insert (map-empty) k k)`, nested compounds emit
+    /// the `map-union (compose r (inverse r)) ...` chain). Top-level and
+    /// action-side stay consistent so the same user term encodes to the
+    /// same e-class regardless of where it appears.
     fn rewrite_compound_call(
         &self,
         span: Span,
@@ -778,9 +1027,10 @@ impl<'a> SlottedInstrumentor<'a> {
             child_results.push(self.rewrite_expr_with_slots(arg));
         }
 
-        // Walk U-children in order, accumulating distinct outer slots.
-        let mut app_slot_for: HashMap<i64, i64> = HashMap::default();
-        let mut app_slots_in_order: Vec<i64> = Vec::new();
+        // The compound's own outer slot list = deduped union of U-children's
+        // slot lists in encounter order.
+        let mut seen: HashSet<i64> = HashSet::default();
+        let mut outer_slots: Vec<i64> = Vec::new();
         for ((_child_expr, child_slots), &is_u) in
             child_results.iter().zip(mask.iter())
         {
@@ -788,16 +1038,14 @@ impl<'a> SlottedInstrumentor<'a> {
                 continue;
             }
             for &s in child_slots {
-                if !app_slot_for.contains_key(&s) {
-                    let app_slot = app_slots_in_order.len() as i64;
-                    app_slot_for.insert(s, app_slot);
-                    app_slots_in_order.push(app_slot);
+                if seen.insert(s) {
+                    outer_slots.push(s);
                 }
             }
         }
 
-        // Build the rewritten arg list, inserting an edge-rename after each
-        // U-typed child that maps the child's outer slots to App-slots.
+        // Build the rewritten arg list, inserting an identity-at-slots edge
+        // rename after each U-typed child.
         let mut new_args: Vec<Expr> = Vec::with_capacity(child_results.len() * 2);
         for ((child_expr, child_slots), &is_u) in
             child_results.into_iter().zip(mask.iter())
@@ -806,21 +1054,19 @@ impl<'a> SlottedInstrumentor<'a> {
             if !is_u {
                 continue;
             }
-            // Construct (map-insert (map-insert ... (map-empty) k1 v1) k2 v2) ...
             let mut rename_expr = GenericExpr::Call(
                 span.clone(),
                 "map-empty".to_string(),
                 Vec::new(),
             );
             for s in &child_slots {
-                let app_slot = *app_slot_for.get(s).expect("slot must be assigned");
                 rename_expr = GenericExpr::Call(
                     span.clone(),
                     "map-insert".to_string(),
                     vec![
                         rename_expr,
                         GenericExpr::Lit(span.clone(), Literal::Int(*s)),
-                        GenericExpr::Lit(span.clone(), Literal::Int(app_slot)),
+                        GenericExpr::Lit(span.clone(), Literal::Int(*s)),
                     ],
                 );
             }
@@ -829,7 +1075,7 @@ impl<'a> SlottedInstrumentor<'a> {
 
         (
             GenericExpr::Call(span, head, new_args),
-            app_slots_in_order,
+            outer_slots,
         )
     }
 }

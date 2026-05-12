@@ -168,6 +168,25 @@ impl ContainerSort for MapSort {
             }
         }});
 
+        // (map-union m1 m2) returns the union of two maps. If a key is
+        // present in both with different values, returns None. The slotted
+        // encoder uses this to synthesize identity renames over the union
+        // of multiple body-bound renames' slot spaces.
+        add_primitive!(eg, "map-union" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -?> @MapContainer (arc) {{
+            let mut new_map = xs.data.clone();
+            for (k, v) in ys.data.iter() {
+                if let Some(existing) = new_map.get(k) {
+                    if existing != v { return None; }
+                }
+                new_map.insert(*k, *v);
+            }
+            Some(MapContainer {
+                do_rebuild_keys: xs.do_rebuild_keys,
+                do_rebuild_vals: xs.do_rebuild_vals,
+                data: new_map
+            })
+        }});
+
         // add shape primitive
         eg.add_primitive(Shape {});
         eg.add_primitive(Inverse {});

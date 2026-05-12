@@ -1,0 +1,52 @@
+;; Auto-instrumented companion to tests/slotted-egraph-encoding-11.egg.
+;; Same four α-equivalence cases, but written in plain user-facing form —
+;; the --slotted pass adds the Renaming sort, RenamesToLeader_U relation,
+;; transitivity, leaf pair rule, App α-finder, migration, and child-rewrite
+;; rules, and inserts identity-at-literal edge renames in each top-level
+;; expression. Saturation runs automatically between commands.
+;;
+;;   1. Swap of two free variables:
+;;        (App "f" v1 v2)  ≡  (App "f" v2 v1)
+;;   2. Cyclic permutation of three variables, nested:
+;;        (App "f" (App "g" v1 v2) v3)  ≡  (App "f" (App "g" v3 v1) v2)
+;;   3. Same shape, different slot ids:
+;;        (App "f" v1 v1)  ≡  (App "f" v2 v2)
+;;   4. Negative — different free-slot counts should not unify:
+;;        (App "f" v1 v1)  ≢  (App "f" v1 v2)
+
+(sort U)
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+
+
+;; Case 1: swap
+(let $v1 (Var 20))
+(let $v2 (Var 1))
+(let $a1 (App "f" $v1 $v2))
+(let $a2 (App "f" $v2 $v1))
+
+;; Case 2: nested 3-cycle
+(let $w1 (Var 100))
+(let $w2 (Var 200))
+(let $w3 (Var 300))
+(let $b1 (App "f" (App "g" $w1 $w2) $w3))
+(let $b2 (App "f" (App "g" $w3 $w1) $w2))
+
+;; Case 3: same shape, different ids
+(let $u1 (Var 50))
+(let $u2 (Var 60))
+(let $c1 (App "h" $u1 $u1))
+(let $c2 (App "h" $u2 $u2))
+
+;; Case 4: negative
+(let $d1 (App "k" $u1 $u1))
+(let $d2 (App "k" $u1 $u2))
+
+
+;; positives
+(check (= $a1 $a2))
+(check (= $b1 $b2))
+(check (= $c1 $c2))
+
+;; negative
+(fail (check (= $d1 $d2)))

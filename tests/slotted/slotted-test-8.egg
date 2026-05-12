@@ -1,0 +1,18 @@
+; Action introduces a literal atomic-id leaf (Var 99). The encoder should
+; emit (map-insert (map-empty) 99 99) as the leaf's edge rename — identity
+; at slot 99 — rather than (map-empty).
+
+(sort U)
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+
+(rule ((= e (App "f" a b)))
+      ((union e (App "wrap" a (Var 99)))))
+
+(let $v1 (Var 5))
+(let $v2 (Var 7))
+(let $f (App "f" $v1 $v2))
+
+(run 10)
+
+(check (= $f (App "wrap" $v1 (Var 99))))

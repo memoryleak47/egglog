@@ -1,0 +1,19 @@
+; Action introduces a nested fresh compound. The inner App's outgoing
+; rename — appearing at the outer App's edge position — should be
+; identity over the union of values from the inner's child renames,
+; computed via map-union of compose-inverse chains.
+
+(sort U)
+(constructor Var (i64) U)
+(constructor App (String U U) U)
+
+(rule ((= e (App "f" a b)))
+      ((union e (App "wrap" (App "g" a b) (Var 99)))))
+
+(let $v1 (Var 5))
+(let $v2 (Var 7))
+(let $f (App "f" $v1 $v2))
+
+(run 10)
+
+(check (= $f (App "wrap" (App "g" $v1 $v2) (Var 99))))
