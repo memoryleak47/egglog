@@ -40,6 +40,8 @@
     )
 )
 
+; Test 1
+(push)
 (let $v1 (Var 24))
 (let $v2 (Var 12))
 (let $v3 (Var 3))
@@ -57,4 +59,41 @@
 (check (= $v1 (Rename _ $v4)))
 (check (= $x2 (Rename _ $y2)))
 
-(print-function Rename)
+(pop)
+
+; Test 2: symmetries
+(push)
+
+(union
+    (App "f" (Var 1) (Var 2))
+    (App "f" (Var 2) (Var 1))
+)
+
+(let $a (App "g" (Var 42) (App "f" (Var 6) (Var 8))))
+(let $b (App "g" (Var 42) (App "f" (Var 8) (Var 6))))
+
+(run 100)
+
+; Here we check equality up to renaming!
+(check (= $a (Rename _ $b)))
+
+(pop)
+
+
+; Test 3: redundancies
+(push)
+
+(union
+    (App "f" (Var 1) (Var 2))
+    (App "f" (Var 1) (Var 3))
+)
+
+(let $a (App "g" (Var 42) (App "f" (Var 33) (Var 17))))
+(let $b (App "g" (Var 42) (App "f" (Var 33) (Var 18))))
+
+(run 100)
+
+; Here we check equality up to renaming!
+(check (= $a (Rename _ $b)))
+
+(pop)
