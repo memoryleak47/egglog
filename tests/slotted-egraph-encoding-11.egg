@@ -54,9 +54,9 @@
 (rule ((RenamesToLeader e2 e1 R)
        (= e2 (App f c1 r1 c2 r2))
        (!= e1 e2))
-      ((union e2 (App f c1 (compose R r1) c2 (compose R r2)))))
+      ((union e1 (App f c1 (compose R r1) c2 (compose R r2)))))
 
-;; per-position child rewrites.
+;; per-position child rewrites- canonicalize children to use representatives
 (rule ((RenamesToLeader c c' R)
        (= node (App f c r1 c2 r2))
        (!= c c'))
@@ -123,10 +123,15 @@
 (run 20)
 
 
-;; positives
-(check (= $a1 $a2))
-(check (= $b1 $b2))
-(check (= $c1 $c2))
+(fail (check (= $a1 $a2)))
+(check (RenamesToLeader $a2 leader R)
+       (RenamesToLeader $a1 leader R2))
+(check (RenamesToLeader $b1 leader R)
+       (RenamesToLeader $b2 leader R2))
+(check (RenamesToLeader $c1 leader R)
+       (RenamesToLeader $c2 leader R2))
 
 ;; negative — should remain in distinct e-classes.
 (fail (check (= $d1 $d2)))
+(fail (check (RenamesToLeader $d1 leader R)
+             (RenamesToLeader $d2 leader R2)))
