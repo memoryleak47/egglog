@@ -494,8 +494,8 @@ mod tests {
 
     #[test]
     fn test_find_mapping_data_0_1() {
-        let first = map(&[(0, 1)]);
-        let second = map(&[(0, 0)]);
+        let first = map(&[(8, 1)]);
+        let second = map(&[(8, 0)]);
 
         let result = find_mapping_data([(&first, &second)]).unwrap();
 
@@ -504,10 +504,18 @@ mod tests {
 
     #[test]
     fn test_does_not_find_mapping_differ_shape() {
-        let first = map(&[(0, 1), (1, 1)]);
-        let second = map(&[(0, 2), (1, 1)]);
+        let first = map(&[(8, 1), (9, 1)]);
+        let second = map(&[(8, 2), (9, 1)]);
 
         assert_eq!(find_mapping_data([(&first, &second)]), None);
+    }
+
+    #[test]
+    fn test_does_not_find_mapping_same_shape() {
+        let first = map(&[(8, 1), (9, 1)]);
+        let second = map(&[(8, 2), (9, 2)]);
+
+        assert_eq!(find_mapping_data([(&first, &second)]).unwrap(), map(&[(2, 1)]));
     }
 
     #[test]
