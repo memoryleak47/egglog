@@ -183,3 +183,16 @@
        (RenamesToLeader $c4 m2 leader))
 
 (pop)
+
+
+;;; Case 6- RenamesToLeader Var reflexivity test
+(push)
+
+(let $v1 (Var 1))
+(let $v2 (Var 2))
+
+(run 10)
+(check (RenamesToLeader $v1 m1 leader)
+       (RenamesToLeader $v2 m2 leader))
+
+(pop)
