@@ -57,11 +57,16 @@
     ((union x (Rename (compose m1 m2) y)))
 )
 
-; shape computation for Var
+; shape computation for (Var n) with n != 0
 (rule
-    ((Var n))
-    ((union (Var n) (Rename (map-insert (map-empty) 0 n) (Var 0))))
+    ((Var n)
+     (!= n 0))
+    ((union (Var n) (Rename (map-insert (map-empty) 0 n) (Var 0)))
+     (delete (Var n)))
 )
+
+; shape computation for (Var 0)
+(union (Var 0) (Rename (map-insert (map-empty) 0 0) (Var 0)))
 
 
 ;; (App f (Rename ... (Var 3)) (Rename ... (Var 0)))
@@ -141,6 +146,8 @@
 
 (check (= (Project $t1) (Project $t2)))
 (check (!= (Project $t1) (Project $t3)))
+
+(extract $v2)
 
 (print-size)
 
