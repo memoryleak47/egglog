@@ -38,12 +38,13 @@
        (RenamesToLeader e2 m23 e3))
       ((RenamesToLeader e1 (compose m12 m23) e3)))
 
-;; leaf pair rule (no leaf-side migration — leaves stay distinct).
-(rule ((= e1 (Var v1))
-       (= e2 (Var v2))
-       (!= v1 v2)
-       (= e2 (ordering-max e1 e2)))
-      ((RenamesToLeader e2 (map-insert (map-empty) v1 v2) e1)))
+;; replace (Var v) by [0 -> v] * (Var 0)
+(rule ((= e (Var v))
+       (!= v 0))
+      ((RenamesToLeader e (map-insert (map-empty) 0 v) (Var 0))
+      ; (delete (Var v)) ;; Deleting this causes unextractable value.
+      )
+)
 
 ;; α-finder: two App nodes with the same head and same children, related
 ;; by a single bijection on their edge renames.
@@ -77,6 +78,12 @@
        (!= c c'))
       ((union node (App f m1 c1 (compose m2 m) c'))))
 
+
+
+;;; Init setup:
+
+; This guarantees that (Var 0) is the lowest ordering-max variable, and it has a reflexive RenamesToLeader entry.
+(RenamesToLeader (Var 0) (map-insert (map-empty) 0 0) (Var 0))
 
 ;;; Tests ;;;
 
@@ -194,5 +201,7 @@
 (run 10)
 (check (RenamesToLeader $v1 m1 leader)
        (RenamesToLeader $v2 m2 leader))
+
+(extract $v2) ; This extraction should optimally return a renamed version of (Var 0)
 
 (pop)
