@@ -8,9 +8,7 @@
 ; - Further, it is intended that each U will have a Rename edge (back & forth) to its leader, and no other Renaming edges.
 ; - Renaming edges across non-leaders will be lowered via ordering-max with the "unionfind flattening" rule.
 ; - shape computation is guarded by a "has_delta" function that checks that the resulting shape is actually different from the original shape.
-;   this is necessary, as shape computation adds new edges among two followers that will need to be "unionfind flattened" again.
-;   repeated shape computation would thus require us to re-flatten again and again.
-;   Actually inserting the shape directly as a Renamed version of the leader might be beneficial.
+;   Otherwise the `delete` of the old shape would also delete the new shape.
 
 (sort Renaming (Map i64 i64))
 (sort VecOfRenaming (Vec Renaming))
