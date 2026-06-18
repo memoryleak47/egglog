@@ -1,11 +1,12 @@
 ; Version 12:
 ;;;;;;;;;;;;;;
 
-; - This version garbage collects old shapes, however when also GC-ing old Rename nodes we run into trouble (unclear why).
+; - This version garbage collects old shapes, and redundant Rename nodes.
 ; - The idea of this encoding is that we have the strictly enforced invariant that `(= x (Rename m y))` if and only if `(= y (Rename (inverse m) x)`,
 ;   and all rules that add, or delete one of those renamings will also have to add/delete the other.
 ; - We want both edges as we otherwise run into "Unextractable Value" problems, where the e-node from some e-class was removed in favor of another (equal-up-to-renaming) one.
 ; - Further, it is intended that each U will have a Rename edge (back & forth) to its leader, and no other Renaming edges.
+;   In particular this means that each leader will have a self-Rename-edge and one Rename edge per follower.
 ; - Renaming edges across non-leaders will be lowered via ordering-max with the "unionfind flattening" rule.
 ; - shape computation is guarded by a "has_delta" function that checks that the resulting shape is actually different from the original shape.
 ;   Otherwise the `delete` of the old shape would also delete the new shape.
@@ -21,6 +22,19 @@
 (constructor App (bool String U U) U)
 (constructor Rename (Renaming U) U)
 
+
+; leaders inherit a reflexive edge from their followers.
+(rule
+    (
+        (= a (Rename m_ba b))
+        (!= a b)
+        (= b (ordering-max a b))
+    )
+    (
+        (union a (Rename (compose m_ba (inverse m_ba)) a))
+    )
+)
+
 ; unionfind flattening
 ; if a ~ b ~ c, and a < b, c; then the b~c edge should be transformed to a a~c edge.
 (rule
@@ -29,7 +43,7 @@
         (= b (Rename m_cb c))
         (!= a b)
         (!= a c)
-        (!= b c)
+        ; Note that 'b' might be equal to 'c'
         (= b (ordering-max a b))
         (= c (ordering-max a c))
     )
@@ -38,9 +52,8 @@
         (union a (Rename (compose m_ba m_cb) c))
         (union c (Rename (inverse (compose m_ba m_cb)) a))
 
-        ; TODO: Deleting these renamings is apparently problematic. why?
-        ; (delete (Rename m_cb c))
-        ; (delete (Rename (inverse m_cb) b))
+        (delete (Rename m_cb c))
+        (delete (Rename (inverse m_cb) b))
     )
 )
 
@@ -103,22 +116,23 @@
         (= $v2 (Rename m2 leader))
     )
 
-    (extract $v1)     ; (Rename _ (Var 0))
-    (extract $v2)     ; (Rename _ (Var 0))
-    (extract (Var 0)) ; (Var 0)
+    ; (extract $v1)     ; (Rename _ (Var 0))
+    ; (extract $v2)     ; (Rename _ (Var 0))
+    ; (extract (Var 0)) ; (Var 0)
 (pop)
+
+; 2. simple shape computation
 
 (push)
     (let $a (App false "f" (Var 1) (Var 2)))
     (let $b (App false "f" (Var 3) (Var 4)))
 
-    (run 13)
+    (run 10)
 
     (check
         (= $a (Rename m1 leader))
         (= $b (Rename m2 leader))
     )
 
-    (extract $a)
-    (extract $b)
+    (print-function App) ; NOTE: just one App!
 (pop)
