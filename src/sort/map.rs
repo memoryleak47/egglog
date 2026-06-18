@@ -191,6 +191,7 @@ impl ContainerSort for MapSort {
         eg.add_primitive(Shape {});
         eg.add_primitive(Inverse {});
         eg.add_primitive(Compose {});
+        eg.add_primitive(HasDelta);
 
         // `find-mapping` is the slotted-egraph "rename between two nodes that
         // share a shape" helper. It only makes sense over `Map i64 i64`
@@ -464,6 +465,33 @@ fn inverse(m1: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
         res.insert(*v, *k);
     }
     res
+}
+
+
+
+#[derive(Clone, Debug)]
+struct HasDelta;
+
+impl Primitive for HasDelta {
+    fn name(&self) -> &str {
+        "has_delta"
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+        // TODO actually get right type.
+        Box::new(AllEqualTypeConstraint::new(self.name(), span.clone()))
+    }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let b = exec_state
+                .base_values()
+                .unwrap::<bool>(args[0]);
+        // if b is false, or some input is different: we return Some(_).
+        let other_args_different = false; // TODO reset to = (args[1], args[2], args[3], args[4]) != (args[5], args[6], args[7], args[8]);
+        if !b || other_args_different { return Some(Value::new_const(42)) }
+
+        None
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,126 @@
+; Version 12:
+;;;;;;;;;;;;;;
+
+; - This version garbage collects old shapes, however when also GC-ing old Rename nodes we run into trouble (unclear why).
+; - The idea of this encoding is that we have the strictly enforced invariant that `(= x (Rename m y))` if and only if `(= y (Rename (inverse m) x)`,
+;   and all rules that add, or delete one of those renamings will also have to add/delete the other.
+; - We want both edges as we otherwise run into "Unextractable Value" problems, where the e-node from some e-class was removed in favor of another (equal-up-to-renaming) one.
+; - Further, it is intended that each U will have a Rename edge (back & forth) to its leader, and no other Renaming edges.
+; - Renaming edges across non-leaders will be lowered via ordering-max with the "unionfind flattening" rule.
+; - shape computation is guarded by a "has_delta" function that checks that the resulting shape is actually different from the original shape.
+;   this is necessary, as shape computation adds new edges among two followers that will need to be "unionfind flattened" again.
+;   repeated shape computation would thus require us to re-flatten again and again.
+;   Actually inserting the shape directly as a Renamed version of the leader might be beneficial.
+
+(sort Renaming (Map i64 i64))
+(sort VecOfRenaming (Vec Renaming))
+
+(sort U) ; includes terms, ids, nodes.
+
+(constructor Var (i64) U)
+;; The user will always set the bool to false meaning "uninitialized", shape computation will set it to true.
+;; This is a temporary hack to guarantee that each e-class `x` has at least one `(= x (Rename _ _))` equation.
+(constructor App (bool String U U) U)
+(constructor Rename (Renaming U) U)
+
+; unionfind flattening
+; if a ~ b ~ c, and a < b, c; then the b~c edge should be transformed to a a~c edge.
+(rule
+    (
+        (= a (Rename m_ba b))
+        (= b (Rename m_cb c))
+        (!= a b)
+        (!= a c)
+        (!= b c)
+        (= b (ordering-max a b))
+        (= c (ordering-max a c))
+    )
+
+    (
+        (union a (Rename (compose m_ba m_cb) c))
+        (union c (Rename (inverse (compose m_ba m_cb)) a))
+
+        ; TODO: Deleting these renamings is apparently problematic. why?
+        ; (delete (Rename m_cb c))
+        ; (delete (Rename (inverse m_cb) b))
+    )
+)
+
+; shape computation for Var
+(rule
+    ((= v (Var n))
+     (!= n 0))
+    ((union v (Rename (map-insert (map-empty) 0 n) (Var 0)))
+     (union (Var 0) (Rename (map-insert (map-empty) n 0) v))
+     (delete (Var n)))
+)
+
+; setup reflexivity for (Var 0)
+(union (Var 0) (Rename (map-insert (map-empty) 0 0) (Var 0)))
+
+; shape computation for App
+(rule 
+    (
+        (= x (App i f (Rename m1 a1) (Rename m2 a2)))
+        (= a1 (Rename m1' c1))
+        (= a2 (Rename m2' c2))
+        (= (ordering-max a1 c1) a1)
+        (= (ordering-max a2 c2) a2)
+
+        (= mc1 (compose m1 m1'))
+        (= mc2 (compose m2 m2'))
+
+        ; After canonization we effectively get:
+        ;   (= x (App i f (Rename mc1 c1) (Rename mc2 c2)))
+
+        ; m_sh :: slots(x) -> shape-slots
+        (= m_sh (shape2 mc1 mc2))
+
+        ; Checks that the new shape is different from the old one,
+        ; because only under this assumption it's safe to `delete` the old one.
+        (has_delta i)
+        ; TODO: use this when I asked Oliver how to make set the TypeConstraints for this.
+        ; (has_delta i   m1 a1 m2 a2   mc1 c1 mc2 c2)
+    )
+    (
+        (delete (App i f (Rename m1 a1) (Rename m2 a2)))
+
+        (union x (Rename (inverse m_sh) (App true f (Rename (compose m_sh mc1) c1) (Rename (compose m_sh mc2) c2))))
+        (union (Rename m_sh x)          (App true f (Rename (compose m_sh mc1) c1) (Rename (compose m_sh mc2) c2)))
+    )
+)
+
+;; Tests:
+
+; 1. Variables:
+
+(push)
+    (let $v1 (Var 1))
+    (let $v2 (Var 2))
+
+    (run 10)
+
+    (check
+        (= $v1 (Rename m1 leader))
+        (= $v2 (Rename m2 leader))
+    )
+
+    (extract $v1)     ; (Rename _ (Var 0))
+    (extract $v2)     ; (Rename _ (Var 0))
+    (extract (Var 0)) ; (Var 0)
+(pop)
+
+(push)
+    (let $a (App false "f" (Var 1) (Var 2)))
+    (let $b (App false "f" (Var 3) (Var 4)))
+
+    (run 13)
+
+    (check
+        (= $a (Rename m1 leader))
+        (= $b (Rename m2 leader))
+    )
+
+    (extract $a)
+    (extract $b)
+(pop)
