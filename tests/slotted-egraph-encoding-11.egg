@@ -1,21 +1,9 @@
-;; Hand-encoded slotted egraph using the identity-at-literal convention
-;; (each edge rename has keys = values = the child's own slot ids). Mirrors
-;; what the --slotted auto-encoder emits, but written out by hand so this
-;; file runs without the --slotted flag. Covers four α-equivalence cases:
-;;
-;;   1. Swap of two free variables:
-;;        (App "f" v1 v2)  ≡  (App "f" v2 v1)
-;;   2. Cyclic permutation of three variables, nested:
-;;        (App "f" (App "g" v1 v2) v3)  ≡  (App "f" (App "g" v3 v1) v2)
-;;   3. Same shape, different slot ids:
-;;        (App "f" v1 v1)  ≡  (App "f" v2 v2)
-;;   4. Negative — different free-slot counts should not unify:
-;;        (App "f" v1 v1)  ≢  (App "f" v1 v2)
-;;
-;; The machinery (Renaming, RenamesToLeader, transitivity, leaf pair,
-;; α-finder, migration, child-rewrites) is the same shape as the docs in
-;; src/slotted_encoding.md.
-
+;; Oliver's favorite encoding as july 2
+;; Keeps track of a canonical renamed form for each eclass using a union-find table called
+;; "RenamesToLeader".
+;; The job of shape computation rules is to find collisions, pick one of them to be the leader, then add a RenamesToLeader entry for the other eclass to point to the leader, with the appropriate renaming.
+;; Footgun: RenamesToLeader needs to be initialized for each thing you add to the egraph, otherwise you might miss things in your query at the end. 
+;; We delete nodes which are not canonical, compressing the e-graph. So you can't match on them anymore, but you can use their value and RenamesToLeader to find the canonical representative.
 
 ;;; Machinery ;;;
 
@@ -32,17 +20,28 @@
 ;; We require `leader <= follower` in terms of ordering-max.
 (relation RenamesToLeader (U Renaming U))
 
-;; transitivity
-;; e1 = m12*e2 /\ e2 = m23*e2 --> e1 = m12*m23*e3
+;; transitivity / path compression
+;; e1 = m12*e2 /\ e2 = m23*e3 --> e1 = m12*m23*e3
 (rule ((RenamesToLeader e1 m12 e2)
-       (RenamesToLeader e2 m23 e3))
+       (RenamesToLeader e2 m23 e3)
+       (!= e2 e3)
+       )
       ((RenamesToLeader e1 (compose m12 m23) e3)))
+
+;; single parent
+;; a = m1*b /\ a = m2*c  --> b = m1⁻¹*m2*c
+(rule ((RenamesToLeader a m1 b)
+       (RenamesToLeader a m2 c)
+       (!= b c)
+       (= (ordering-max b c) b))
+      ((delete (RenamesToLeader a m1 b))
+       (RenamesToLeader b (compose (inverse m1) m2) c)))
 
 ;; replace (Var v) by [0 -> v] * (Var 0)
 (rule ((= e (Var v))
        (!= v 0))
       ((RenamesToLeader e (map-insert (map-empty) 0 v) (Var 0))
-      ; (delete (Var v)) ;; Deleting this causes unextractable value.
+       (delete (Var v))
       )
 )
 
@@ -202,6 +201,8 @@
 (check (RenamesToLeader $v1 m1 leader)
        (RenamesToLeader $v2 m2 leader))
 
-(extract $v2) ; This extraction should optimally return a renamed version of (Var 0)
+
+(fail (extract $v2)) ; the renamed version of $v2 is there but the original $v2 is not extractable because it was deleted.
+;; in the encoding we'll look up the leader when you extract anything automatically.
 
 (pop)
