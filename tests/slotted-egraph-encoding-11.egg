@@ -205,4 +205,25 @@
 (fail (extract $v2)) ; the renamed version of $v2 is there but the original $v2 is not extractable because it was deleted.
 ;; in the encoding we'll look up the leader when you extract anything automatically.
 
+
+(pop)
+
+;;; Case 7- redundancies (II)
+(push)
+
+; If you look at the --to-svg of this (without the push/pop),
+; you'll see we create far to many nodes for this. We should have one App node, but have eight.
+
+; 1 - 1
+(let $m11 (App "m" (map-insert (map-empty) 1 1) (Var 1)
+                  (map-insert (map-empty) 1 1) (Var 1)))
+
+; 2 - 2
+(let $m22 (App "m" (map-insert (map-empty) 2 2) (Var 2)
+                  (map-insert (map-empty) 2 2) (Var 2)))
+
+(union $m11 $m22)
+
+(run 10)
+
 (pop)
