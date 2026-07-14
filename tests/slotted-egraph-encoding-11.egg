@@ -58,6 +58,22 @@
        (= e1 (ordering-max e1 e2)))
       ((RenamesToLeader e1 m e2)))
 
+;; Symmetry rule
+;; Find two App nodes with the same shape and same eclass
+;; Delete the one with larger ordering max for the renames
+(rule ((= e (App f m1 c1 m1' c2))
+       (= e (App f m2 c1 m2' c2))
+       (= m (find-mapping m1 m1' m2 m2'))
+       (guard
+         (or (and
+              (bool= (ordering-max m1 m2) m2)
+              (bool-!= m1 m2))
+             (and (bool= m1 m2)
+                  (bool-!= m1' m2')
+                  (bool= (ordering-max m1' m2') m2')))))
+      ((delete (App f m2 c1 m2' c2))
+       (RenamesToLeader e m e)))
+
 ;; migration:
 ;; if `e2 = f(m1*c1, m2*c2)` /\ `e2 = m*e1`, then `e1 = m⁻¹*e2 = m⁻¹*f(m1*c1, m2*c2) = f(m⁻¹*m1*c1, m⁻¹*m2*c2)`
 (rule ((RenamesToLeader e2 m e1)
@@ -221,7 +237,7 @@
 (push)
 
 ; If you look at the --to-svg of this (without the push/pop),
-; you'll see we create far to many nodes for this. We should have one App node, but have eight.
+; we get one App node in the end due to the symmetry rule above
 
 ; 1 - 1
 (let $m11 (App "m" (map-insert (map-empty) 1 1) (Var 1)

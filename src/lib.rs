@@ -414,6 +414,20 @@ impl Default for EGraph {
             }
         );
 
+        add_primitive_with_validator!(
+            &mut eg,
+            "bool=" = |a: #, b: #| -> bool {
+                (a == b)
+            },
+            |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+                if args.len() == 2 {
+                    Some(termdag.lit(Literal::Bool(args[0] == args[1])))
+                } else {
+                    None
+                }
+            }
+        );
+
         add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
             (a == b).then_some(())
         });
@@ -1600,9 +1614,7 @@ impl EGraph {
             }
 
             Ok(proof_form(typechecked, &mut self.parser.symbol_gen))
-        } else if let Some(slotted_typechecking) =
-            self.slotted_original_typechecking.as_mut()
-        {
+        } else if let Some(slotted_typechecking) = self.slotted_original_typechecking.as_mut() {
             // Typecheck using the original egraph (before slotted-encoding symbols)
             let mut typechecked = slotted_typechecking.typecheck_program(&desugared)?;
 
