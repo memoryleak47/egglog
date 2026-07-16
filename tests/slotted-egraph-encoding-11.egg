@@ -20,6 +20,9 @@
 ;; We require `leader <= follower` in terms of ordering-max.
 (relation RenamesToLeader (U Renaming U))
 
+; This is a basic object not depending on any variables.
+(constructor Null () U)
+
 ;; transitivity / path compression
 ;; e1 = m12*e2 /\ e2 = m23*e3 --> e1 = m12*m23*e3
 (rule ((RenamesToLeader e1 m12 e2)
@@ -107,6 +110,7 @@
 
 ; This guarantees that (Var 0) is the lowest ordering-max variable, and it has a reflexive RenamesToLeader entry.
 (RenamesToLeader (Var 0) (map-insert (map-empty) 0 0) (Var 0))
+(RenamesToLeader (Null) (map-empty) (Null))
 
 ;;; Tests ;;;
 
@@ -250,5 +254,27 @@
 (union $m11 $m22)
 
 (run 10)
+
+(pop)
+
+;;; Case 8- more toying around
+(push)
+
+(let $v7 (Var 7))
+(let $v0 (Var 0))
+
+(let $f7 (App "f" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
+(let $g7 (App "g" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
+
+(union $f7 $g7)
+
+(let $f8 (App "f" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
+(let $h8 (App "h" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
+(union $f8 $h8)
+
+(run 10)
+
+(check (RenamesToLeader $g7 m1 leader)
+       (RenamesToLeader $h8 m2 leader))
 
 (pop)
