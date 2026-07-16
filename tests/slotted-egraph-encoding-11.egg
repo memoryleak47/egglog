@@ -106,6 +106,16 @@
         (delete (App f m1 c1 m2 c))
       ))
 
+; Self-symmetries for form a group
+(rule (
+        (RenamesToLeader l m1 l)
+        (RenamesToLeader l m2 l)
+      )
+      (
+        (RenamesToLeader l (compose m1 m2) l)
+      )
+)
+
 ; shrinking rule for RenamesToLeader
 (rule (
         (RenamesToLeader l m l) ; l is a leader with the self-symmetry m.
