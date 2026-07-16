@@ -125,7 +125,33 @@
       )
 )
 
-; TODO we probably need another shrinking rule for children in an App
+; per-child shrinking rule.
+; TODO: should probably be integrated into the general per-child update rule, if we have "or".
+(rule
+    (
+        (RenamesToLeader c1 m c1)
+        (= (compose m m) m)
+        (= node (App f m1 c1 m2 c2))
+        (!= m1 (compose m1 m))
+    )
+    (
+        (union node (App f (compose m1 m) c1 m2 c2))
+        (delete (App f m1 c1 m2 c2))
+    )
+)
+
+(rule
+    (
+        (RenamesToLeader c2 m c2)
+        (= (compose m m) m)
+        (= node (App f m1 c1 m2 c2))
+        (!= m2 (compose m2 m))
+    )
+    (
+        (union node (App f m1 c1 (compose m2 m) c2))
+        (delete (App f m1 c1 m2 c2))
+    )
+)
 
 ;;; Init setup:
 
@@ -301,6 +327,8 @@
 (pop)
 
 ;;; Case 9- redundancies bug.
+(push)
+
 (let $v7 (Var 7))
 (let $v0 (Var 0))
 
@@ -313,3 +341,5 @@
 
 (check (RenamesToLeader $f7 m1 leader)
        (RenamesToLeader $f8 m2 leader))
+
+(pop)
