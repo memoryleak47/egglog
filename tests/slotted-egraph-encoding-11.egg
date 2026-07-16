@@ -299,3 +299,17 @@
        (RenamesToLeader $h8 m2 leader))
 
 (pop)
+
+;;; Case 9- redundancies bug.
+(let $v7 (Var 7))
+(let $v0 (Var 0))
+
+(let $f7 (App "f" (map-insert (map-empty) 7 7) (Var 7) (map-empty) (Null)))
+(let $f8 (App "f" (map-insert (map-empty) 8 8) (Var 8) (map-empty) (Null)))
+
+(union $v7 $v0)
+
+(run 10)
+
+(check (RenamesToLeader $f7 m1 leader)
+       (RenamesToLeader $f8 m2 leader))
