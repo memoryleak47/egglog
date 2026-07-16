@@ -106,6 +106,27 @@
         (delete (App f m1 c1 m2 c))
       ))
 
+; shrinking rule for RenamesToLeader
+(rule (
+        (RenamesToLeader l m l) ; l is a leader with the self-symmetry m.
+        (= (compose m m) m) ; m is an idempotent self-symmetry of l.
+                            ; Such a self-symmetry effectively just shrinks the set of slots,
+                            ; so it just spreads redundancies.
+
+        (RenamesToLeader fl m' l) ; fl = l, or fl is a follower of l.
+        (= (ordering-max fl l) fl)
+
+        (!= (compose m' m) m') ; m' isn't "shrunk" by m yet.
+      )
+      (
+        ; then "shrink" m' by m.
+        (RenamesToLeader fl (compose m' m) l)
+        (delete (RenamesToLeader fl m' l))
+      )
+)
+
+; TODO we probably need another shrinking rule for children in an App
+
 ;;; Init setup:
 
 ; This guarantees that (Var 0) is the lowest ordering-max variable, and it has a reflexive RenamesToLeader entry.
