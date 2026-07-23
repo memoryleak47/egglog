@@ -163,6 +163,35 @@
     )
 )
 
+; lambda specific rules
+
+(rule
+    (
+        (RenamesToLeader
+            (App "lambda" mvar (Var 0) m b)
+            ml l)
+        (= v (map-get mvar 0))
+    )
+    (
+        (RenamesToLeader
+            (App "lambda" mvar (Var 0) m b)
+            (inverse (map-remove (inverse ml) v)) l)
+    )
+)
+
+; general merger:
+; - if two things are equal up to some identity renaming, let's merge them.
+
+(rule
+    (
+        (RenamesToLeader a m b)
+        (= (compose m m) m)
+    )
+    (
+        (union a b)
+    )
+)
+
 ;;; Init setup:
 
 ; This guarantees that (Var 0) is the lowest ordering-max variable, and it has a reflexive RenamesToLeader entry.
@@ -350,5 +379,23 @@
 (run 10)
 
 (check (RenamesToLeader $f0 m1 leader) (RenamesToLeader $f7 m2 leader))
+
+(pop)
+
+
+;;; Case 10- lambda alpha equivalence.
+(push)
+
+(let $lam00 (App "lambda"
+                (map-insert (map-empty) 0 0) (Var 0)
+                (map-insert (map-empty) 0 0) (Var 0)))
+
+(let $lam11 (App "lambda"
+                (map-insert (map-empty) 1 1) (Var 1)
+                (map-insert (map-empty) 1 1) (Var 1)))
+
+(run 10)
+
+(check (= $lam00 $lam11))
 
 (pop)
