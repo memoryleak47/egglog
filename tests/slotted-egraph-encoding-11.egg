@@ -31,8 +31,10 @@
 ;; e1 = m12*e2 /\ e2 = m23*e3 --> e1 = m12*m23*e3
 (rule ((RenamesToLeader e1 m12 e2)
        (RenamesToLeader e2 m23 e3)
-       (!= e2 e3)
-       )
+       ; something has to be different: either e2 != e3, or m23 is actually changing something.
+       (guard (or (bool-!= e2 e3)
+                  (and (bool-!= (compose m12 m23) m12)
+                       (bool= (compose m23 m23) m23))))) ; we exclude non-idempotent self-symmetries
       ((RenamesToLeader e1 (compose m12 m23) e3)))
 
 ;; single parent
@@ -180,26 +182,6 @@
         (RenamesToLeader l (compose m1 m2) l)
       )
 )
-
-; shrinking rule for RenamesToLeader
-(rule (
-        (RenamesToLeader l m l) ; l is a leader with the self-symmetry m.
-        (= (compose m m) m) ; m is an idempotent self-symmetry of l.
-                            ; Such a self-symmetry effectively just shrinks the set of slots,
-                            ; so it just spreads redundancies.
-
-        (RenamesToLeader fl m' l) ; fl = l, or fl is a follower of l.
-        (= (ordering-max fl l) fl)
-
-        (!= (compose m' m) m') ; m' isn't "shrunk" by m yet.
-      )
-      (
-        ; then "shrink" m' by m.
-        (RenamesToLeader fl (compose m' m) l)
-        (delete (RenamesToLeader fl m' l))
-      )
-)
-
 
 ; if two things are equal up to some identity renaming, let's merge them.
 (rule
