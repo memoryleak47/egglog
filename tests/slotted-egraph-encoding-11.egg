@@ -395,3 +395,32 @@
 (check (= $lam00 $lam11))
 
 (pop)
+
+
+;;; Case 11- f(0, 1) = f(1, 0)
+(push)
+
+(let $f01 (App "f"
+                (map-insert (map-empty) 0 0) (Var 0)
+                (map-insert (map-empty) 1 1) (Var 1)))
+
+(let $f10 (App "f"
+                (map-insert (map-empty) 1 1) (Var 1)
+                (map-insert (map-empty) 0 0) (Var 0)))
+
+(let $node1 (App "g"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f01
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f01))
+
+(let $node2 (App "g"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f01
+                (map-insert (map-insert (map-empty) 0 1) 1 0) $f01))
+
+(union $f01 $f10)
+
+(run 10)
+
+(check (RenamesToLeader $node1 m1 leader)
+       (RenamesToLeader $node2 m2 leader))
+
+(pop)
