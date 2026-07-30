@@ -43,8 +43,16 @@
 ;; a = m1*b /\ a = m2*c  --> b = m1⁻¹*m2*c
 (rule ((RenamesToLeader a m1 b)
        (RenamesToLeader a m2 c)
-       (!= b c)
-       (= (ordering-max b c) b))
+
+       (!= a c) ; We don't want this rule to fire for a=b=c, as it would remove symmetries from our group.
+       (= (ordering-max b c) b) ; c <= b
+
+                                            ; either
+       (guard (or (bool-!= b c)             ; c < b, or
+                  (and (bool= b c)          ; b=c, but m2 < m1
+                       (bool-!= m1 m2)
+                       (bool= (ordering-max m1 m2) m1)))))
+
       ((delete (RenamesToLeader a m1 b))
        (RenamesToLeader b (compose (inverse m1) m2) c)))
 
