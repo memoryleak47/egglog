@@ -97,6 +97,18 @@
       )
 )
 
+; non-destructive symmetry-finder based on the above.
+(rule ((= e (App f m_o c1 m'_o c2))
+       (RenamesToLeader c1 sym c1)
+       (RenamesToLeader c2 sym' c2)
+       (= m (compose m_o sym))
+       (= m' (compose m'_o sym'))
+       (= sym_out (find-mapping m_o m'_o m m')))
+      (
+        (RenamesToLeader e sym_out e)
+      )
+)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Everything has to have a self-loop ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
