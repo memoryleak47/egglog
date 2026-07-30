@@ -23,6 +23,10 @@
 ; This is a basic object not depending on any variables.
 (constructor Null () U)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; General Unionfind Properties ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ;; transitivity / path compression
 ;; e1 = m12*e2 /\ e2 = m23*e3 --> e1 = m12*m23*e3
 (rule ((RenamesToLeader e1 m12 e2)
@@ -40,6 +44,10 @@
       ((delete (RenamesToLeader a m1 b))
        (RenamesToLeader b (compose (inverse m1) m2) c)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Deduplicate nodes that are equal up to renaming ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ;; replace (Var v) by [0 -> v] * (Var 0)
 (rule ((= e (Var v))
        (!= v 0))
@@ -48,8 +56,7 @@
       )
 )
 
-;; α-finder: two App nodes with the same head and same children, related
-;; by a single bijection on their edge renames.
+;; α-finder: Will find two App nodes that are equal up to renaming, and eliminate one in favor of the other.
 
 ;; Input: e1 = f(m1*c1, m1'*c2) /\ e2 = f(m2*c1, m2'*c2),
 ;; then m = (find-mapping m1 m1' m2 m2') is the smallest renaming, s.t. m*m2 = m1 /\ m*m2' = m1'
@@ -58,26 +65,39 @@
 (rule ((= e1 (App f m1 c1 m1' c2))
        (= e2 (App f m2 c1 m2' c2))
        (= m (find-mapping m1 m1' m2 m2'))
-       (= e1 (ordering-max e1 e2)))
-      ((RenamesToLeader e1 m e2)))
-
-;; Symmetry rule
-;; Find two App nodes with the same shape and same eclass
-;; Delete the one with larger ordering max for the renames
-(rule ((= e (App f m1 c1 m1' c2))
-       (= e (App f m2 c1 m2' c2))
-       (= m (find-mapping m1 m1' m2 m2'))
+       (= e1 (ordering-max e1 e2))
        (guard
-         (or (and
-              (bool= (ordering-max m1 m2) m2)
-              (bool-!= m1 m2))
-             (and (bool= m1 m2)
-                  (bool-!= m1' m2')
-                  (bool= (ordering-max m1' m2') m2')))))
-      ((delete (App f m2 c1 m2' c2))
-       (RenamesToLeader e m e)))
+         (or (bool-!= e1 e2)
+         (and (bool= e1 e2)
+            (or (and
+                 (bool= (ordering-max m1 m2) m2)
+                 (bool-!= m1 m2))
+                (and (bool= m1 m2)
+                     (bool-!= m1' m2')
+                     (bool= (ordering-max m1' m2') m2')))))))
+      (
+        (RenamesToLeader e1 m e2)
+        (delete (App f m1 c1 m1' c2)) ; delete the e-node from e1
+      )
+)
 
-;; migration:
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Everything has to have a self-loop ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; This guarantees that (Var 0) is the lowest ordering-max variable, and it has a reflexive RenamesToLeader entry.
+(RenamesToLeader (Var 0) (map-insert (map-empty) 0 0) (Var 0))
+(RenamesToLeader (Null) (map-empty) (Null))
+
+(rule ((= e1 (App f m1 c1 m1' c2))
+       (= m (find-mapping m1 m1' m1 m1')))
+      ((RenamesToLeader e1 m e1))
+)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Migration of e-nodes ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ;; if `e2 = f(m1*c1, m2*c2)` /\ `e2 = m*e1`, then `e1 = m⁻¹*e2 = m⁻¹*f(m1*c1, m2*c2) = f(m⁻¹*m1*c1, m⁻¹*m2*c2)`
 (rule ((RenamesToLeader e2 m e1)
        (= e2 (App f m1 c1 m2 c2))
@@ -87,26 +107,71 @@
         (delete (App f m1 c1 m2 c2))
       ))
 
+;;;;;;;;;;;;;;;;;;;;;;;
+;; Child-Update rule ;;
+;;;;;;;;;;;;;;;;;;;;;;;
+
 ;; per-position child rewrites- canonicalize children to use representatives
 ;; These replace `c` with the more canonical `m*c'`.
-(rule ((RenamesToLeader c m c')
-       (= node (App f m1 c m2 c2))
-       (!= c c'))
+
+;;;; First child:
+
+(rule ((RenamesToLeader c1 m c')
+       (= node (App f m1 c1 m2 c2))
+       (guard ; if c1=c' then m is idempotent (we don't want self-symmetries here)
+            (or (bool-!= c1 c')
+                (bool= (compose m m) m))
+       )
+       (guard ; the new node has to be different from the old one (thus either the e-class, or the renaming has changed)
+            (or (bool-!= c1 c')
+                (bool-!= (compose m1 m) m1))
+       ))
       (
         (union node (App f (compose m1 m) c' m2 c2))
-        (delete (App f m1 c m2 c2))
-      ))
+        (delete (App f m1 c1 m2 c2))
+      )
+)
 
+;;;; Second child:
 
-(rule ((RenamesToLeader c m c')
-       (= node (App f m1 c1 m2 c))
-       (!= c c'))
+(rule ((RenamesToLeader c2 m c')
+       (= node (App f m1 c1 m2 c2))
+       (guard ; if c2=c' then m is idempotent (we don't want self-symmetries here)
+            (or (bool-!= c2 c')
+                (bool= (compose m m) m))
+       )
+       (guard ; the new node has to be different from the old one (thus either the e-class, or the renaming has changed)
+            (or (bool-!= c2 c')
+                (bool-!= (compose m2 m) m2))
+       ))
       (
         (union node (App f m1 c1 (compose m2 m) c'))
-        (delete (App f m1 c1 m2 c))
-      ))
+        (delete (App f m1 c1 m2 c2))
+      )
+)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Lambda alpha-equivalence ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-; Self-symmetries for form a group
+(rule
+    (
+        (RenamesToLeader
+            (App "lambda" mvar (Var 0) m b)
+            ml l)
+        (= v (map-get mvar 0))
+    )
+    (
+        (RenamesToLeader
+            (App "lambda" mvar (Var 0) m b)
+            (inverse (map-remove (inverse ml) v)) l)
+    )
+)
+
+;;;;;;;;;;
+;; MISC ;;
+;;;;;;;;;;
+
+; Self-symmetries form a group
 (rule (
         (RenamesToLeader l m1 l)
         (RenamesToLeader l m2 l)
@@ -135,53 +200,8 @@
       )
 )
 
-; per-child shrinking rule.
-; TODO: should probably be integrated into the general per-child update rule, if we have "or".
-(rule
-    (
-        (RenamesToLeader c1 m c1)
-        (= (compose m m) m)
-        (= node (App f m1 c1 m2 c2))
-        (!= m1 (compose m1 m))
-    )
-    (
-        (union node (App f (compose m1 m) c1 m2 c2))
-        (delete (App f m1 c1 m2 c2))
-    )
-)
 
-(rule
-    (
-        (RenamesToLeader c2 m c2)
-        (= (compose m m) m)
-        (= node (App f m1 c1 m2 c2))
-        (!= m2 (compose m2 m))
-    )
-    (
-        (union node (App f m1 c1 (compose m2 m) c2))
-        (delete (App f m1 c1 m2 c2))
-    )
-)
-
-; lambda specific rules
-
-(rule
-    (
-        (RenamesToLeader
-            (App "lambda" mvar (Var 0) m b)
-            ml l)
-        (= v (map-get mvar 0))
-    )
-    (
-        (RenamesToLeader
-            (App "lambda" mvar (Var 0) m b)
-            (inverse (map-remove (inverse ml) v)) l)
-    )
-)
-
-; general merger:
-; - if two things are equal up to some identity renaming, let's merge them.
-
+; if two things are equal up to some identity renaming, let's merge them.
 (rule
     (
         (RenamesToLeader a m b)
@@ -191,12 +211,6 @@
         (union a b)
     )
 )
-
-;;; Init setup:
-
-; This guarantees that (Var 0) is the lowest ordering-max variable, and it has a reflexive RenamesToLeader entry.
-(RenamesToLeader (Var 0) (map-insert (map-empty) 0 0) (Var 0))
-(RenamesToLeader (Null) (map-empty) (Null))
 
 ;;; Tests ;;;
 
