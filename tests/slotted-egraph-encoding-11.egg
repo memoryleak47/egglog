@@ -492,6 +492,7 @@
 (pop)
 
 ;;; Case 13- single leader redundancies
+(push)
 
 (let $null (Null))
 (let $f (App "f"
@@ -505,3 +506,5 @@
 (fail (check (RenamesToLeader $f m l)
              (RenamesToLeader l sym l)
              (!= sym (map-empty))))
+
+(pop)
