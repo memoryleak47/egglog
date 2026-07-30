@@ -74,10 +74,14 @@
 ;; then m = (find-mapping m1 m1' m2 m2') is the smallest renaming, s.t. m*m2 = m1 /\ m*m2' = m1'
 ;; so that m*e2 = m*f(m2*c1, m2'*c2) = f(m*m2*c1, m*m2'*c2) = f(m1*c1, m1'*c2) = e1
 ;; so in short m*e2 = e1.
-(rule ((= e1 (App f m1 c1 m1' c2))
+(rule ((= e1 (App f m1_o c1 m1'_o c2))
        (= e2 (App f m2 c1 m2' c2))
-       (= m (find-mapping m1 m1' m2 m2'))
        (= e1 (ordering-max e1 e2))
+       (RenamesToLeader c1 sym c1)
+       (RenamesToLeader c2 sym' c2)
+       (= m1 (compose m1_o sym))
+       (= m1' (compose m1'_o sym'))
+       (= m (find-mapping m1 m1' m2 m2'))
        (guard
          (or (bool-!= e1 e2)
          (and (bool= e1 e2)
