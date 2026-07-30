@@ -202,7 +202,13 @@
 ; if two things are equal up to some identity renaming, let's merge them.
 (rule
     (
-        (RenamesToLeader a m b)
+        (RenamesToLeader a m1_o c)
+        (RenamesToLeader b m2 c)
+        (RenamesToLeader c sym c)
+
+        (= m1 (compose m1_o sym))
+
+        (= m (compose m1 (inverse m2)))
         (= (compose m m) m)
     )
     (
@@ -436,8 +442,7 @@
 
 (run 10)
 
-(check (RenamesToLeader $node1 m1 leader)
-       (RenamesToLeader $node2 m2 leader))
+(check (= $node1 $node2))
 
 (pop)
 
@@ -472,7 +477,6 @@
 
 (run 10)
 
-(check (RenamesToLeader $node1 m1 leader)
-       (RenamesToLeader $node2 m2 leader))
+(check (= $node1 $node2))
 
 (pop)
