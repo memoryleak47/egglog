@@ -440,3 +440,39 @@
        (RenamesToLeader $node2 m2 leader))
 
 (pop)
+
+;;; Case 12- f(0, 1) = f(1, 0) -> g(f(0, 1)) = g(f(1, 0))
+(push)
+
+(let $f01 (App "f"
+                (map-insert (map-empty) 0 0) (Var 0)
+                (map-insert (map-empty) 1 1) (Var 1)))
+
+(let $f10 (App "f"
+                (map-insert (map-empty) 1 1) (Var 1)
+                (map-insert (map-empty) 0 0) (Var 0)))
+
+(let $g01 (App "g"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f01
+                (map-empty) (Null)))
+
+(let $g10 (App "g"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $f10
+                (map-empty) (Null)))
+
+(let $node1 (App "h"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $g01
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $g01))
+
+(let $node2 (App "h"
+                (map-insert (map-insert (map-empty) 1 1) 0 0) $g01
+                (map-insert (map-insert (map-empty) 0 1) 1 0) $g01))
+
+(union $f01 $f10)
+
+(run 10)
+
+(check (RenamesToLeader $node1 m1 leader)
+       (RenamesToLeader $node2 m2 leader))
+
+(pop)
