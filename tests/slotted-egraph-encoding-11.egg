@@ -56,6 +56,16 @@
       ((delete (RenamesToLeader a m1 b))
        (RenamesToLeader b (compose (inverse m1) m2) c)))
 
+; single parent for symmetries, this does shrinking.
+(rule ((RenamesToLeader a m1 a)
+       (RenamesToLeader a m a)
+       (= m (compose m m))
+       (= m2 (compose m (compose m1 m)))
+       (!= m1 m2))
+      ((delete (RenamesToLeader a m1 a))
+        (RenamesToLeader a m2 a))
+)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Deduplicate nodes that are equal up to renaming ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -480,3 +490,18 @@
 (check (= $node1 $node2))
 
 (pop)
+
+;;; Case 13- single leader redundancies
+
+(let $null (Null))
+(let $f (App "f"
+                (map-insert (map-empty) 0 0) (Var 0)
+                (map-insert (map-empty) 1 1) (Var 1)))
+
+(union $f $null)
+
+(run 10)
+
+(fail (check (RenamesToLeader $f m l)
+             (RenamesToLeader l sym l)
+             (!= sym (map-empty))))
